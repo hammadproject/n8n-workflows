@@ -2,6 +2,3 @@
 .env
 .env.*
 !.env.example
-
-# Contains a bundled .env.local with a real DATABASE_URL.
-home-services-booking-voice-agent-vapi/kiko.ai.zip
