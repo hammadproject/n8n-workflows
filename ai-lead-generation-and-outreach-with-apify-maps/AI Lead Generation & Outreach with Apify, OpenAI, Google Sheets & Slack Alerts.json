@@ -1,0 +1,1788 @@
+{
+  "name": "My workflow",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Local Business Lead Machine\n**Google Maps (Apify) → Website Audit (HTTP + Firecrawl) → Rule-Based Score → AI Pitch (OpenAI gpt-5-mini) → Google Sheets → Slack → Gmail Drafts**\n\n### Setup checklist\n1. **Apify** node → Header Auth: `Authorization` = `Bearer YOUR_APIFY_TOKEN`\n   Actor used: `compass/crawler-google-places`\n2. **Firecrawl** node → separate Header Auth: `Authorization` = `Bearer YOUR_FIRECRAWL_KEY`\n3. **OpenAI Chat Model** → uses n8n Gateway credits, no key needed\n4. **Google Sheets** nodes → point at your sheet, cellFormat = RAW (prevents phone-number formula errors)\n   - **Leads** tab: place_id, business_name, category, address, city, phone, website, rating, reviews_count, maps_url, email, social_url, whatsapp_link, unclaimed_profile, has_website, has_booking, has_chat_widget, has_contact_form, mobile_friendly, copyright_year, opportunity_score, priority, top_gaps, email_subject, email_body, call_opener, status, search, scraped_at, sent_at\n   - **Runs** tab: run_date, search, city, total, hot, warm, cold, emails_found\n5. **Slack** nodes → pick your alerts channel\n6. **Gmail** → outreach only creates **drafts**, nothing is auto-sent. Only leads with status = \"Approved\" get processed.\n\n### Estimated cost: $0\nApify $5/month free credit · Firecrawl free tier · OpenAI via Gateway credits\n\n### Testing\nAlways start with Max Results = 20 (saves Apify credits) before running bigger searches.\n\n⚠️ After any edit: toggle the **Active** switch off/on (top-right) to publish the draft — the schedule trigger runs the *published* version, not this canvas.\n\n---\n\n## 🎯 How Hot / Warm / Cold Is Decided\nRule-based score, 0–100, no AI involved:\n\n**No website** → +45 (or +40 if only a social page)\n**Website loaded but has gaps:**\n- No online booking → +20\n- No live chat / after-hours → +15\n- Not mobile-friendly → +10\n- No contact form → +5\n- Outdated site (old copyright year) → +10\n\n**Always checked:**\n- Google Business Profile not claimed → +10\n- 4.2+ rating with 50+ reviews (established, has budget) → +15\n- No phone AND no email (hard to reach) → −20\n\n**Final bucket:**\n60+ = 🔥 Hot | 35–59 = 🟡 Warm | <35 = ❄️ Cold\n\nCold leads are saved to the sheet but skipped for AI pitch (saves API calls).",
+        "height": 1508,
+        "width": 560
+      },
+      "id": "954fd0eb-43d7-41d0-935e-0822f3ed74da",
+      "name": "Setup Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -2848,
+        -32
+      ]
+    },
+    {
+      "parameters": {
+        "formTitle": "Local Business Lead Machine",
+        "formDescription": "Find local businesses on Google Maps, audit their websites and generate personalized outreach.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Business Type",
+              "placeholder": "e.g. dentist",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "City or Area",
+              "placeholder": "e.g. Austin, Texas",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Country Code",
+              "placeholder": "e.g. us",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Max Results",
+              "fieldType": "dropdown",
+              "fieldOptions": {
+                "values": [
+                  {
+                    "option": "20"
+                  },
+                  {
+                    "option": "50"
+                  },
+                  {
+                    "option": "100"
+                  }
+                ]
+              },
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Your Service",
+              "fieldType": "dropdown",
+              "fieldOptions": {
+                "values": [
+                  {
+                    "option": "AI Chatbot"
+                  },
+                  {
+                    "option": "AI Voice Agent"
+                  },
+                  {
+                    "option": "Booking Automation"
+                  },
+                  {
+                    "option": "Website Redesign"
+                  }
+                ]
+              },
+              "requiredField": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "325ac696-d8b9-4d2d-a336-f11ea3c47ced",
+      "name": "Start Lead Search",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.2,
+      "position": [
+        -2208,
+        320
+      ],
+      "webhookId": "c96b6fec-0211-40a5-8db7-8a88e6b74381"
+    },
+    {
+      "parameters": {
+        "jsCode": "const f = $input.first().json;\nconst max = parseInt(f['Max Results'], 10) || 20;\nreturn [{ json: {\n  search: `${f['Business Type']} in ${f['City or Area']}`,\n  apifyInput: {\n    searchStringsArray: [f['Business Type']],\n    locationQuery: f['City or Area'],\n    countryCode: String(f['Country Code'] || 'us').toLowerCase().trim(),\n    maxCrawledPlacesPerSearch: max,\n    language: 'en',\n    skipClosedPlaces: true,\n    maxReviews: 0,\n    maxImages: 0,\n    maxQuestions: 0\n  }\n}}];"
+      },
+      "id": "400c5467-5cf8-49e6-b8f3-d62940bd8552",
+      "name": "Build Apify Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2032,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.apify.com/v2/acts/compass~crawler-google-places/run-sync-get-dataset-items",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.apifyInput) }}",
+        "options": {
+          "timeout": 300000
+        }
+      },
+      "id": "ffae6306-6ca0-40a9-a661-eceac8208fdc",
+      "name": "Apify - Scrape Google Maps",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -1856,
+        320
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Clean Apify output + remove duplicates (same place OR same website = same business)\nconst search = $('Build Apify Input').first().json.search;\nconst seen = new Set();\nconst out = [];\n// n8n Code sandbox has no URL() class -> plain string/regex helpers\nconst cleanUrl = (u) => {\n  const [base, rest] = String(u || '').split('?');\n  if (rest === undefined) return base;\n  const kept = rest.split('#')[0].split('&').filter(p => p && !/^(utm_|gclid|fbclid|sc_cid|_vsrefdom|y_source|msclkid)/i.test(p));\n  return base + (kept.length ? '?' + kept.join('&') : '');\n};\nconst hostOf = (u) => { const m = String(u || '').match(/^https?:\\/\\/([^\\/?#:]+)/i); return m ? m[1].toLowerCase().replace(/^www\\./, '') : ''; };\nfor (const it of $input.all()) {\n  const p = it.json;\n  if (!p || !p.placeId || seen.has(p.placeId) || p.permanentlyClosed) continue;\n  seen.add(p.placeId);\n  const site = cleanUrl(String(p.website || '').trim());\n  const isSocial = /(instagram\\.com|facebook\\.com|fb\\.com|linktr\\.ee|wa\\.me|tiktok\\.com|m\\.me)/i.test(site);\n  const digits = String(p.phoneUnformatted || p.phone || '').replace(/\\D/g, '');\n  out.push({ json: {\n    place_id: p.placeId,\n    business_name: p.title || '',\n    category: p.categoryName || '',\n    address: p.address || '',\n    city: p.city || '',\n    phone: p.phone || p.phoneUnformatted || '',\n    website: isSocial ? '' : site,\n    social_url: isSocial ? site : '',\n    wa_number: digits.length >= 10 ? digits : '',\n    unclaimed_profile: p.claimThisBusiness === true,\n    rating: p.totalScore || 0,\n    reviews_count: p.reviewsCount || 0,\n    maps_url: p.url || '',\n    has_website: !!site && !isSocial,\n    search,\n    scraped_at: new Date().toISOString()\n  }});\n}\n// Same website listed twice (e.g. practice + doctor profile) -> keep the listing with more reviews\nconst byDomain = new Map();\nfor (const o of out) {\n  const dom = hostOf(o.json.website);\n  const key = dom || o.json.place_id;\n  const prev = byDomain.get(key);\n  if (!prev || (o.json.reviews_count || 0) > (prev.json.reviews_count || 0)) byDomain.set(key, o);\n}\nconst final = [...byDomain.values()];\nif (!final.length) return [{ json: { no_results: true, search } }];\nreturn final;\n"
+      },
+      "id": "41bbc971-8685-4345-a604-78898178575b",
+      "name": "Normalize & Dedupe",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1680,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "0715f047-f8a0-44d9-b34c-7d1452353086",
+              "leftValue": "={{ $json.no_results ? 'no' : 'yes' }}",
+              "rightValue": "yes",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "66da0cca-3d6d-4ca3-80a8-d2acfed84d16",
+      "name": "Got Results?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -1504,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "YOUR_SLACK_CHANNEL_ID",
+          "mode": "list",
+          "cachedResultName": "your-alerts-channel"
+        },
+        "text": "=❌ No results found for: {{ $json.search }}\nTry a more specific search or a different city.",
+        "otherOptions": {}
+      },
+      "id": "21eb5e55-12f3-40cd-b07f-e2a7ce8b8778",
+      "name": "Slack - No Results",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [
+        -1264,
+        416
+      ],
+      "webhookId": "476f3293-e1bb-4fc6-a80a-d567fc64b133"
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.website || 'https://no-website.invalid' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+            }
+          ]
+        },
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 5,
+              "batchInterval": 500
+            }
+          },
+          "allowUnauthorizedCerts": true,
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          },
+          "timeout": 15000
+        }
+      },
+      "id": "e48d8c8e-090e-416a-89b0-21385b9652c8",
+      "name": "Fetch Website",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -1264,
+        224
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Detects website signals from raw HTML\nfunction detect(raw, hasWebsite) {\n  raw = typeof raw === 'string' ? raw : '';\n  const html = raw.toLowerCase();\n  const has = (arr) => arr.some(k => html.includes(k));\n  const bad = (e) => /\\.(png|jpe?g|gif|webp|svg|css|js)$/i.test(e) || /(sentry|example\\.|wixpress|domain\\.com|yourname|email\\.com|mhtml|\\.blink$|^frame-)/i.test(e);\n  const emails = [...new Set((raw.match(/[a-z0-9._%+-]+@[a-z0-9.-]+\\.[a-z]{2,}/gi) || []).map(e => e.toLowerCase()))].filter(e => !bad(e));\n  const years = (raw.match(/(?:©|&copy;|&#169;|copyright)[^<\\n]{0,25}?(20\\d{2})/gi) || []).map(m => Number(m.match(/20\\d{2}/g).pop()));\n  const ok = !!hasWebsite && raw.length > 500;\n  const BOOKING_KEYS = ['calendly.com','acuityscheduling','as.me/','setmore','squareup.com/appointments','square.site/book','book.squareup','zocdoc','vagaro.com','mindbodyonline','mindbody.io','booksy.com','fresha.com','simplybook','getweave','book.getweave','solutionreach','lh360','lighthouse360','yapiapp','yapi.me','modento','carestack','dentrixascend','curvehero','curvedental','denticon','patientpop','tebra.com','kareo','doctible','zenoti','joinblvd','blvd.co','glossgenius','housecallpro','getjobber','servicetitan','nexhealth','localmed','opencare.com','flexbook','calendar.app.google','bookings.cloud.microsoft','janeapp.com','cliniko.com','simplepractice.com','schedulicity','appointy','youcanbook.me','book now','book online','book an appointment','schedule online','schedule today','book a time'];\n  const CHAT_KEYS = ['tawk.to','intercom','drift.com','crisp.chat','tidio','livechatinc','js.hs-scripts','zopim','podium','birdeye','manychat','connect.podium.com','bewebchat','widget.intercom.io','intercomcdn','js.driftt.com','cdn.livechat','js.usemessages.com','static.zdassets.com','olark','freshchat','smartsupp','chatra','userlike','jivosite','jivochat','salesiq.zoho','apexchat','ngagelive','widgets.leadconnectorhq','chatwoot','botpress','voiceflow','chatbase.co','landbot','kommunicate','comm100','lpsnmedia','liveperson','ada.support','signpost.com','broadly.com','thryv'];\n  return {\n    site_reachable: ok,\n    email: emails[0] || '',\n    has_booking: ok && has(BOOKING_KEYS),\n    has_chat_widget: ok && has(CHAT_KEYS),\n    has_contact_form: ok && html.includes('<form'),\n    mobile_friendly: ok && /name=[\"']?viewport/.test(html),\n    copyright_year: years.length ? Math.max(...years) : null\n  };\n}\n\nconst lead = $('Normalize & Dedupe').item.json;\nconst sig = detect($json.data, lead.has_website);\nreturn { json: { ...lead, ...sig } };"
+      },
+      "id": "26e5ed0c-9987-4b58-8f25-638dddf04a0e",
+      "name": "Detect Website Signals",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1088,
+        224
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "102edad7-5caf-499d-91b0-0ce75c13903f",
+              "leftValue": "={{ $json.has_website && (!$json.email || !$json.site_reachable) ? 'yes' : 'no' }}",
+              "rightValue": "yes",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "db8231e0-926f-40e2-a4e5-f694a2e9c89b",
+      "name": "Need Firecrawl?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -912,
+        224
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.firecrawl.dev/v1/scrape",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ url: $json.website, formats: ['rawHtml'], onlyMainContent: false, timeout: 30000 }) }}",
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 2,
+              "batchInterval": 1500
+            }
+          },
+          "timeout": 60000
+        }
+      },
+      "id": "c69a1191-c094-4846-8e36-e8713f433d85",
+      "name": "Firecrawl Scrape",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -688,
+        144
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Detects website signals from raw HTML\nfunction detect(raw, hasWebsite) {\n  raw = typeof raw === 'string' ? raw : '';\n  const html = raw.toLowerCase();\n  const has = (arr) => arr.some(k => html.includes(k));\n  const bad = (e) => /\\.(png|jpe?g|gif|webp|svg|css|js)$/i.test(e) || /(sentry|example\\.|wixpress|domain\\.com|yourname|email\\.com|mhtml|\\.blink$|^frame-)/i.test(e);\n  const emails = [...new Set((raw.match(/[a-z0-9._%+-]+@[a-z0-9.-]+\\.[a-z]{2,}/gi) || []).map(e => e.toLowerCase()))].filter(e => !bad(e));\n  const years = (raw.match(/(?:©|&copy;|&#169;|copyright)[^<\\n]{0,25}?(20\\d{2})/gi) || []).map(m => Number(m.match(/20\\d{2}/g).pop()));\n  const ok = !!hasWebsite && raw.length > 500;\n  const BOOKING_KEYS = ['calendly.com','acuityscheduling','as.me/','setmore','squareup.com/appointments','square.site/book','book.squareup','zocdoc','vagaro.com','mindbodyonline','mindbody.io','booksy.com','fresha.com','simplybook','getweave','book.getweave','solutionreach','lh360','lighthouse360','yapiapp','yapi.me','modento','carestack','dentrixascend','curvehero','curvedental','denticon','patientpop','tebra.com','kareo','doctible','zenoti','joinblvd','blvd.co','glossgenius','housecallpro','getjobber','servicetitan','nexhealth','localmed','opencare.com','flexbook','calendar.app.google','bookings.cloud.microsoft','janeapp.com','cliniko.com','simplepractice.com','schedulicity','appointy','youcanbook.me','book now','book online','book an appointment','schedule online','schedule today','book a time'];\n  const CHAT_KEYS = ['tawk.to','intercom','drift.com','crisp.chat','tidio','livechatinc','js.hs-scripts','zopim','podium','birdeye','manychat','connect.podium.com','bewebchat','widget.intercom.io','intercomcdn','js.driftt.com','cdn.livechat','js.usemessages.com','static.zdassets.com','olark','freshchat','smartsupp','chatra','userlike','jivosite','jivochat','salesiq.zoho','apexchat','ngagelive','widgets.leadconnectorhq','chatwoot','botpress','voiceflow','chatbase.co','landbot','kommunicate','comm100','lpsnmedia','liveperson','ada.support','signpost.com','broadly.com','thryv'];\n  return {\n    site_reachable: ok,\n    email: emails[0] || '',\n    has_booking: ok && has(BOOKING_KEYS),\n    has_chat_widget: ok && has(CHAT_KEYS),\n    has_contact_form: ok && html.includes('<form'),\n    mobile_friendly: ok && /name=[\"']?viewport/.test(html),\n    copyright_year: years.length ? Math.max(...years) : null\n  };\n}\n\n// Re-run detection on Firecrawl's rendered HTML (better data for JS-heavy / blocked sites)\nconst lead = $('Detect Website Signals').item.json;\nconst d = $json.data || {};\nconst raw = d.rawHtml || d.html || d.markdown || '';\nif (!raw) return { json: lead };\nconst sig = detect(raw, true);\nreturn { json: { ...lead, ...sig, email: lead.email || sig.email } };"
+      },
+      "id": "a716ff21-fc01-4461-80fd-a59757c37a85",
+      "name": "Extract Firecrawl Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -512,
+        144
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "5d83fe4f-db0a-4636-829e-93291c4d7313",
+      "name": "Merge Website Results",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        -688,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Rule-based opportunity score (transparent + explainable to clients)\nconst l = $json;\nlet s = 0;\nconst gaps = [];\nif (!l.has_website) {\n  if (l.social_url) { s += 40; gaps.push('Only a social media page, no website'); }\n  else { s += 45; gaps.push('No website'); }\n}\nelse if (!l.site_reachable) { gaps.push('Website could not be analyzed'); }\nelse {\n  if (!l.has_booking) { s += 20; gaps.push('No online booking'); }\n  if (!l.has_chat_widget) { s += 15; gaps.push('No live chat / after-hours support'); }\n  if (!l.mobile_friendly) { s += 10; gaps.push('Not mobile-friendly'); }\n  if (!l.has_contact_form) { s += 5; gaps.push('No contact form'); }\n  if (l.copyright_year && l.copyright_year < new Date().getFullYear() - 1) { s += 10; gaps.push(`Outdated site (© ${l.copyright_year})`); }\n}\nif (l.unclaimed_profile) { s += 10; gaps.push('Google Business Profile not claimed'); }\nif (l.rating >= 4.2 && l.reviews_count >= 50) s += 15;   // established business = has budget\nif (!l.phone && !l.email) s -= 20;                       // hard to contact\ns = Math.max(0, Math.min(100, s));\nreturn { json: { ...l, opportunity_score: s, top_gaps: gaps.join(', '),\n  priority: s >= 60 ? 'Hot' : s >= 35 ? 'Warm' : 'Cold' } };"
+      },
+      "id": "4fd47a07-137c-4b7e-b1f3-01ee707116c2",
+      "name": "Opportunity Score",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -304,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "3b4928ee-0c18-4fe2-8b13-ee75e5324faa",
+              "leftValue": "={{ $json.priority !== 'Cold' ? 'yes' : 'no' }}",
+              "rightValue": "yes",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "b121cdf3-c744-49b5-b475-21d74d458255",
+      "name": "Needs Pitch?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -144,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "batchSize": 2,
+        "options": {}
+      },
+      "id": "28924027-7ba3-4585-accf-32b9adc7c8e6",
+      "name": "AI Batch Loop",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        128,
+        224
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You are a B2B outreach copywriter for a small AI automation agency.\nOur service to pitch: {{ $('Start Lead Search').first().json['Your Service'] }}\n\nBusiness: {{ $json.business_name }}\nCategory: {{ $json.category }}\nCity: {{ $json.city }}\nGoogle reviews: {{ $json.reviews_count > 0 ? $json.rating + ' stars from ' + $json.reviews_count + ' reviews' : 'no reviews yet - do NOT mention ratings or review counts' }}\nWebsite: {{ $json.website || ($json.social_url ? 'none (only social page: ' + $json.social_url + ')' : 'none') }}\nGaps we found: {{ $json.top_gaps || 'none obvious' }}\n\nWrite:\n1. email_subject: under 7 words, no clickbait, no emojis.\n2. email_body: under 110 words. Start with \"Hi {{ $json.business_name }} team,\". Open with ONE specific, genuine compliment - use their rating/reviews ONLY if they have reviews, otherwise compliment their services or online presence instead. Explain the single most important gap (from 'Gaps we found' only) as missed customers/revenue - never insult them, never invent a gap that isn't listed. Offer our service as the fix in one sentence. End with a soft yes/no question. No fake statistics, no made-up sender name or company name, no placeholders like [Name]. Sign off as \"Best regards\".\n3. call_opener: 2 short sentences a caller could say on a cold call. Do not invent a caller name or company name.\n\nReturn ONLY the JSON object.",
+        "hasOutputParser": true
+      },
+      "id": "16439674-dfda-49f0-8d3b-69c98a45c754",
+      "name": "Write Pitch (AI)",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.5,
+      "position": [
+        384,
+        64
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsonSchemaExample": "{\n  \"email_subject\": \"Quick idea for Smile Dental\",\n  \"email_body\": \"Hi Smile Dental team, ...\",\n  \"call_opener\": \"Hi, this is ... I noticed ...\"\n}"
+      },
+      "id": "2ba8db9d-ff61-4935-8a01-401565821ea2",
+      "name": "Pitch JSON Parser",
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.2,
+      "position": [
+        544,
+        224
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const lead = $('AI Batch Loop').item.json;\nconst o = ($json && $json.output) || {};\nreturn { json: { ...lead,\n  email_subject: o.email_subject || '',\n  email_body: o.email_body || '',\n  call_opener: o.call_opener || '',\n  status: o.email_body ? 'Drafted' : 'AI Failed'\n}};"
+      },
+      "id": "5ff96bd8-0f28-49dc-bd84-438c483fdc7d",
+      "name": "Attach Pitch",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        688,
+        64
+      ]
+    },
+    {
+      "parameters": {
+        "amount": 10
+      },
+      "id": "3e1f113c-56b4-4b2f-b464-31a2392d0c58",
+      "name": "Rate Limit Pause",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        864,
+        64
+      ],
+      "webhookId": "4a12ac35-0cc2-4bf1-a3d8-129db9a9d163"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "return { json: { ...$json, email_subject: '', email_body: '', call_opener: '', status: 'New' } };"
+      },
+      "id": "27f091bb-0773-47e1-ba44-0840c69adc7e",
+      "name": "Skip Pitch (Cold)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        112,
+        496
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "fe302c12-d72e-45a1-9721-eb0059c4b2a7",
+      "name": "Merge All Leads",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        352,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const l = $json;\nconst yn = v => (v ? 'Yes' : 'No');\nconst waText = l.email_body ? '?text=' + encodeURIComponent(l.email_body) : '';\nconst wa = l.wa_number ? `https://wa.me/${l.wa_number}${waText}` : '';\nreturn { json: {\n  place_id: l.place_id, business_name: l.business_name, category: l.category,\n  address: l.address, city: l.city, phone: l.phone, website: l.website,\n  rating: l.rating, reviews_count: l.reviews_count, maps_url: l.maps_url,\n  email: l.email || '', social_url: l.social_url || '', whatsapp_link: wa,\n  unclaimed_profile: yn(l.unclaimed_profile),\n  has_website: yn(l.has_website), has_booking: yn(l.has_booking),\n  has_chat_widget: yn(l.has_chat_widget), has_contact_form: yn(l.has_contact_form),\n  mobile_friendly: yn(l.mobile_friendly), copyright_year: l.copyright_year || '',\n  opportunity_score: l.opportunity_score, priority: l.priority, top_gaps: l.top_gaps,\n  email_subject: l.email_subject || '', email_body: l.email_body || '',\n  call_opener: l.call_opener || '', status: l.status || 'New',\n  search: l.search, scraped_at: l.scraped_at\n}};"
+      },
+      "id": "c7e1cd69-c3b0-40a8-9336-9d55f276a427",
+      "name": "Prepare Sheet Row",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        528,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_GOOGLE_SHEET_ID"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Leads",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/YOUR_GOOGLE_SHEET_ID/edit"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [
+            "place_id"
+          ],
+          "schema": [
+            {
+              "id": "place_id",
+              "displayName": "place_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "business_name",
+              "displayName": "business_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "category",
+              "displayName": "category",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "address",
+              "displayName": "address",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "city",
+              "displayName": "city",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "phone",
+              "displayName": "phone",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "website",
+              "displayName": "website",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "rating",
+              "displayName": "rating",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "reviews_count",
+              "displayName": "reviews_count",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "maps_url",
+              "displayName": "maps_url",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "email",
+              "displayName": "email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "social_url",
+              "displayName": "social_url",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "whatsapp_link",
+              "displayName": "whatsapp_link",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "unclaimed_profile",
+              "displayName": "unclaimed_profile",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "has_website",
+              "displayName": "has_website",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "has_booking",
+              "displayName": "has_booking",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "has_chat_widget",
+              "displayName": "has_chat_widget",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "has_contact_form",
+              "displayName": "has_contact_form",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "mobile_friendly",
+              "displayName": "mobile_friendly",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "copyright_year",
+              "displayName": "copyright_year",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "opportunity_score",
+              "displayName": "opportunity_score",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "priority",
+              "displayName": "priority",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "top_gaps",
+              "displayName": "top_gaps",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "email_subject",
+              "displayName": "email_subject",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "email_body",
+              "displayName": "email_body",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "call_opener",
+              "displayName": "call_opener",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "search",
+              "displayName": "search",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "scraped_at",
+              "displayName": "scraped_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "sent_at",
+              "displayName": "sent_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {
+          "cellFormat": "RAW"
+        }
+      },
+      "id": "edfdc3bd-79d0-45b9-8ab6-1d5ea9638c33",
+      "name": "Save Leads to Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        704,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const rows = $('Prepare Sheet Row').all().map(i => i.json);\nconst f = $('Start Lead Search').first().json;\nconst count = p => rows.filter(r => r.priority === p).length;\nreturn [{ json: {\n  run_date: new Date().toISOString(),\n  search: f['Business Type'],\n  city: f['City or Area'],\n  total: rows.length,\n  hot: count('Hot'),\n  warm: count('Warm'),\n  cold: count('Cold'),\n  emails_found: rows.filter(r => r.email).length\n}}];"
+      },
+      "id": "8a737100-60fb-48d5-b793-d24149e8af0b",
+      "name": "Run Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_GOOGLE_SHEET_ID"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 1072382532,
+          "mode": "list",
+          "cachedResultName": "Runs",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/YOUR_GOOGLE_SHEET_ID/edit"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "run_date",
+              "displayName": "run_date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "search",
+              "displayName": "search",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "city",
+              "displayName": "city",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "total",
+              "displayName": "total",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "hot",
+              "displayName": "hot",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "warm",
+              "displayName": "warm",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "cold",
+              "displayName": "cold",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "emails_found",
+              "displayName": "emails_found",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {
+          "cellFormat": "RAW"
+        }
+      },
+      "id": "011244f9-61c3-4115-9135-0ce222a150a8",
+      "name": "Log Run",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1056,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "YOUR_SLACK_CHANNEL_ID",
+          "mode": "list",
+          "cachedResultName": "your-alerts-channel",
+          "cachedResultUrl": ""
+        },
+        "text": "=✅ Lead run complete: {{ $('Run Summary').first().json.search }} in {{ $('Run Summary').first().json.city }}\n📍 Businesses: {{ $('Run Summary').first().json.total }}\n🔥 Hot: {{ $('Run Summary').first().json.hot }} | 🟡 Warm: {{ $('Run Summary').first().json.warm }} | ❄️ Cold: {{ $('Run Summary').first().json.cold }}\n📧 Emails found: {{ $('Run Summary').first().json.emails_found }}\n👉 Review drafts in the Leads sheet and set status to Approved.",
+        "otherOptions": {}
+      },
+      "id": "ed232fab-85c1-4c88-ba3d-95a3e7d15ad8",
+      "name": "Slack - Run Summary",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [
+        1232,
+        480
+      ],
+      "executeOnce": true,
+      "webhookId": "9d9307f2-86e6-4926-881c-1718f0eb1c54"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 10 * * 1-5"
+            }
+          ]
+        }
+      },
+      "id": "520ec67d-a787-42b6-9d3c-d02f5a1cb76b",
+      "name": "Weekdays 10 AM",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -2240,
+        928
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// DRAFT MODE: emails are saved as Gmail DRAFTS only. Nothing is ever sent automatically.\n// Open Gmail > Drafts to review each pitch, then send manually if you want.\nreturn [{ json: { mode: 'draft' } }];"
+      },
+      "id": "590a560e-cd56-438a-8467-aadc0e2acc4d",
+      "name": "Config",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2064,
+        928
+      ]
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_GOOGLE_SHEET_ID"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Leads",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/YOUR_GOOGLE_SHEET_ID/edit"
+        },
+        "options": {}
+      },
+      "id": "867ecd71-c1bf-4951-9846-1c3a063124ec",
+      "name": "Get Approved Leads",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        -1888,
+        928
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "baddad1d-fc79-44e2-9f20-efbe610f5809",
+              "leftValue": "={{ $json.email }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a86b9f3b-eb7e-498e-83b6-8222c0d9f2e6",
+      "name": "Has Email?",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2,
+      "position": [
+        -1712,
+        928
+      ]
+    },
+    {
+      "parameters": {
+        "maxItems": 20
+      },
+      "id": "920401c4-979e-4be4-8170-1829def478a4",
+      "name": "Daily Cap (20)",
+      "type": "n8n-nodes-base.limit",
+      "typeVersion": 1,
+      "position": [
+        -1536,
+        928
+      ]
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "1a56fa5d-c54a-4946-9104-119c3454eae3",
+      "name": "Loop Emails",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        -1344,
+        928
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_GOOGLE_SHEET_ID"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Leads",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/YOUR_GOOGLE_SHEET_ID/edit"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "place_id": "={{ $('Loop Emails').item.json.place_id }}",
+            "status": "Gmail Draft",
+            "sent_at": "={{ $now.toISO() }}"
+          },
+          "matchingColumns": [
+            "place_id"
+          ],
+          "schema": [
+            {
+              "id": "place_id",
+              "displayName": "place_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "sent_at",
+              "displayName": "sent_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {
+          "cellFormat": "RAW"
+        }
+      },
+      "id": "320bcf25-a68c-4c03-8563-f5c537c6f138",
+      "name": "Mark as Drafted",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        -928,
+        1024
+      ]
+    },
+    {
+      "parameters": {
+        "amount": 2
+      },
+      "id": "ecc04c58-6ba1-47fe-8396-b38ebda4922c",
+      "name": "Short Pause",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        -752,
+        1024
+      ],
+      "webhookId": "ac7e67e2-a928-4098-92b4-0d17edd17b61"
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "YOUR_SLACK_CHANNEL_ID",
+          "mode": "list",
+          "cachedResultName": "your-alerts-channel"
+        },
+        "text": "=:memo: *Outreach drafts ready:* {{ $('Daily Cap (20)').all().length }} Gmail draft(s) created.\n:point_right: Open Gmail → Drafts to review. Nothing was sent.",
+        "otherOptions": {}
+      },
+      "id": "3e81029f-8ee2-456e-bb46-96779ccfed17",
+      "name": "Slack - Outreach Done",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [
+        -1104,
+        832
+      ],
+      "executeOnce": true,
+      "webhookId": "acb77298-203e-4557-a17d-62fddfda80b6"
+    },
+    {
+      "parameters": {},
+      "id": "f967d8df-51c7-4ed4-bfbd-fde9ab345537",
+      "name": "On Workflow Error",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        -240,
+        1088
+      ]
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "YOUR_SLACK_CHANNEL_ID",
+          "mode": "list",
+          "cachedResultName": "your-alerts-channel"
+        },
+        "text": "=🚨 Workflow failed: {{ $json.workflow.name }}\nNode: {{ $json.execution.lastNodeExecuted }}\nError: {{ $json.execution.error.message }}\n{{ $json.execution.url }}",
+        "otherOptions": {}
+      },
+      "id": "cfac6bed-c47c-4035-b148-594d1b6d71b4",
+      "name": "Slack - Error Alert",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [
+        -64,
+        1088
+      ],
+      "webhookId": "aa46d284-0c59-4ce0-bcdc-f596138db0cd"
+    },
+    {
+      "parameters": {
+        "resource": "draft",
+        "subject": "={{ $json.email_subject }}",
+        "message": "={{ $json.email_body }}",
+        "options": {
+          "sendTo": "={{ $json.email }}"
+        }
+      },
+      "id": "cd3600ff-d045-44df-b873-5fb09fbb0052",
+      "name": "Create Gmail Draft",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        -1104,
+        1024
+      ],
+      "webhookId": "e02e5ca9-8c2a-4130-ae04-2c39133b0f3e"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "ec01bb59-72f8-40e0-bbff-1614f29fd1dc",
+      "name": "OpenAI Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1,
+      "position": [
+        368,
+        224
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## 1 · Find Businesses\nApify scrapes Google Maps for the search + city.\nDuplicates (same place or same website) are merged.",
+        "height": 330,
+        "width": 910,
+        "color": 4
+      },
+      "id": "ca1bc21f-5eae-4927-9913-2bca17af4347",
+      "name": "S1 - Find Leads",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -2272,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## 2 · Audit Each Website\nFetches every site, detects booking tools / live chat / mobile-friendliness.\nFirecrawl re-checks sites that failed or gave no email.",
+        "height": 516,
+        "width": 1008,
+        "color": 6
+      },
+      "id": "dc7e6638-06d5-4f99-992e-1184a8334038",
+      "name": "S2 - Audit Websites",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -1344,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## 3 · Score & Filter\nRule-based 0–100 opportunity score.\n60+ Hot · 35–59 Warm · <35 Cold (skips AI pitch)",
+        "height": 388,
+        "width": 372,
+        "color": 5
+      },
+      "id": "a90e8da5-f6b0-4df0-8cac-f3292993faae",
+      "name": "S3 - Score",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -320,
+        176
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## 4 · AI Writes the Pitch\nOnly Hot/Warm leads get a pitch (saves AI calls).\nGPT-5-mini writes subject + email + call opener, grounded in real gaps only.",
+        "height": 452,
+        "width": 996,
+        "color": "#D0EAF0"
+      },
+      "id": "f85a7853-85df-4828-ad32-2722b57f6d7f",
+      "name": "S4 - AI Pitch",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        64,
+        -96
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## 5 · Save & Notify\nAll leads (Hot/Warm/Cold) saved to the Leads sheet.\nRun totals logged + Slack summary posted.",
+        "height": 292,
+        "width": 1092,
+        "color": 3
+      },
+      "id": "f26f02a6-1c15-498f-885e-8368f5e2fc5a",
+      "name": "S5 - Save & Notify",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        320,
+        368
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## 6 · Approved Outreach (Weekdays 10 AM)\nOnly leads YOU set to Approved get processed.\nCreates a **Gmail draft** per lead — nothing is ever sent automatically.",
+        "height": 586,
+        "width": 1676,
+        "color": 3
+      },
+      "id": "b641f975-241b-495b-b874-b1f2c3b079b3",
+      "name": "S6 - Outreach",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -2272,
+        704
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Error Alerts\nAny node failure anywhere in this workflow posts to Slack.",
+        "height": 282,
+        "width": 460,
+        "color": 2
+      },
+      "id": "87b635b1-1eb2-4ff0-9e84-f98efe50c53c",
+      "name": "S7 - Errors",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -304,
+        976
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Start Lead Search": {
+      "main": [
+        [
+          {
+            "node": "Build Apify Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Apify Input": {
+      "main": [
+        [
+          {
+            "node": "Apify - Scrape Google Maps",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apify - Scrape Google Maps": {
+      "main": [
+        [
+          {
+            "node": "Normalize & Dedupe",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize & Dedupe": {
+      "main": [
+        [
+          {
+            "node": "Got Results?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Got Results?": {
+      "main": [
+        [
+          {
+            "node": "Fetch Website",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Slack - No Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Website": {
+      "main": [
+        [
+          {
+            "node": "Detect Website Signals",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Detect Website Signals": {
+      "main": [
+        [
+          {
+            "node": "Need Firecrawl?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Need Firecrawl?": {
+      "main": [
+        [
+          {
+            "node": "Firecrawl Scrape",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Merge Website Results",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Firecrawl Scrape": {
+      "main": [
+        [
+          {
+            "node": "Extract Firecrawl Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Firecrawl Data": {
+      "main": [
+        [
+          {
+            "node": "Merge Website Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Website Results": {
+      "main": [
+        [
+          {
+            "node": "Opportunity Score",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Opportunity Score": {
+      "main": [
+        [
+          {
+            "node": "Needs Pitch?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Needs Pitch?": {
+      "main": [
+        [
+          {
+            "node": "AI Batch Loop",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Skip Pitch (Cold)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Batch Loop": {
+      "main": [
+        [
+          {
+            "node": "Merge All Leads",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Write Pitch (AI)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write Pitch (AI)": {
+      "main": [
+        [
+          {
+            "node": "Attach Pitch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pitch JSON Parser": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "Write Pitch (AI)",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Attach Pitch": {
+      "main": [
+        [
+          {
+            "node": "Rate Limit Pause",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rate Limit Pause": {
+      "main": [
+        [
+          {
+            "node": "AI Batch Loop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Skip Pitch (Cold)": {
+      "main": [
+        [
+          {
+            "node": "Merge All Leads",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge All Leads": {
+      "main": [
+        [
+          {
+            "node": "Prepare Sheet Row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Sheet Row": {
+      "main": [
+        [
+          {
+            "node": "Save Leads to Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Leads to Sheet": {
+      "main": [
+        [
+          {
+            "node": "Run Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run Summary": {
+      "main": [
+        [
+          {
+            "node": "Log Run",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Run": {
+      "main": [
+        [
+          {
+            "node": "Slack - Run Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Weekdays 10 AM": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Get Approved Leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Approved Leads": {
+      "main": [
+        [
+          {
+            "node": "Has Email?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Email?": {
+      "main": [
+        [
+          {
+            "node": "Daily Cap (20)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Daily Cap (20)": {
+      "main": [
+        [
+          {
+            "node": "Loop Emails",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Emails": {
+      "main": [
+        [
+          {
+            "node": "Slack - Outreach Done",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Create Gmail Draft",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark as Drafted": {
+      "main": [
+        [
+          {
+            "node": "Short Pause",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Short Pause": {
+      "main": [
+        [
+          {
+            "node": "Loop Emails",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "On Workflow Error": {
+      "main": [
+        [
+          {
+            "node": "Slack - Error Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Gmail Draft": {
+      "main": [
+        [
+          {
+            "node": "Mark as Drafted",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Write Pitch (AI)",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "75962f39-885c-40cf-bdcb-9cfd121e272f",
+  "meta": {
+    "instanceId": "19f785bfec424418983ae2884af3c31f6186d9295f360434818bf9be3a1f7bf8"
+  },
+  "nodeGroups": [],
+  "id": "j1xsgDWKwNg21ZCo",
+  "tags": []
+}

@@ -1,0 +1,2203 @@
+{
+  "name": "Travel agency voice agent with Vapi, Google Sheets and Gmail",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "# ✈️ Travel Agency Voice Agent — Vapi + n8n\n\nCallers phone a **Vapi voice assistant** to **search packages** by destination and budget, **book** one, **cancel or change** a booking, or **request a consultant callback**. This workflow is the backend: Vapi calls 4 webhooks, n8n reads/writes Google Sheets and sends emails.\n\n## How it works\n1. **Search packages** → `/travel_search_packages` reads the `Packages` tab and returns matches (plus one optional upsell)\n2. **Book package** → `/travel_book_package` validates, saves the booking, confirms to Vapi and emails the caller (team in BCC)\n3. **Request consultant call** → `/travel_request_consultant_call` saves an `unconfirmed` lead in `Leads` and a `pending` row in `Consultant_Calls`, then emails staff. This is the **human fallback** for callers who don't book\n4. **Manage booking** → `/travel_manage_booking` finds the booking by ID + phone, then cancels it or changes date / travellers\n\n## Requirements\n* n8n (cloud or self-hosted)\n* Vapi account with an assistant + phone number\n* Google account (Sheets + Gmail)\n\n## Setup (about 10 minutes)\n1. **Create a Google Sheet** with 4 tabs (row-1 headers, exactly):\n   * `Packages` — `package_id, destination, title, duration_days, price_per_person, category, inclusions, best_season, visa_note, addons, active` (add a few sample packages with `active = TRUE`)\n   * `Bookings` — `booking_id, name, phone_number, email, package_id, package_title, destination, travel_date, group_size, price_per_person, total_price, status, conversation_id, created_at, updated_at`\n   * `Leads` — `lead_id, name, phone_number, email, destination, budget, group_size, package_id, notes, status, conversation_id, created_at`\n   * `Consultant_Calls` — `request_id, lead_id, name, phone_number, reason, preferred_time, status, created_at`\n2. **Add credentials**: Google Sheets OAuth2 + Gmail OAuth2 on every Sheets / Gmail node\n3. **Replace placeholders**: `YOUR_GOOGLE_SHEET_ID` (all Sheets nodes) and `YOUR_STAFF_EMAIL@example.com` (the 2 Gmail nodes)\n4. **Publish** the workflow and copy the 4 **Production** webhook URLs\n5. **In Vapi**, create 4 *API Request* tools (POST, JSON body):\n   * `search_packages` — required: `destination`, `budget` (total USD), `group_size`; optional: `travel_style`, `duration_days`\n   * `book_package` — required: `name`, `phone_number`, `email`, `package_id`, `travel_date` (YYYY-MM-DD), `group_size`, `caller_confirmed` (must be `true`)\n   * `request_consultant_call` — required: `name`, `phone_number`, `preferred_time`; optional: `reason`, `email`, `destination`, `budget`, `group_size`, `package_id`, `notes`\n   * `manage_booking` — required: `action` (`cancel` or `update`), `booking_id`, `phone_number`, `caller_confirmed` (`true`); for update also `new_travel_date` and/or `new_group_size`\n6. **Add a system prompt** to your Vapi assistant, for example:\n   *\"You are a friendly travel consultant. Always call search_packages before recommending anything and only quote what it returns. Read all details back and get a clear 'yes' before calling book_package or manage_booking (set caller_confirmed=true only then). If the caller doesn't want to book now or asks for a human, call request_consultant_call.\"*\n7. **Test** each flow by calling your Vapi number\n\n## Customize\n* Payment is not handled — the confirmation email says a consultant will share payment details\n* Booking does not check seat availability\n* Swap Gmail for Slack / SMS / WhatsApp, or Google Sheets for Airtable / Postgres / your CRM\n* Your team sets a callback to `done` in the `Consultant_Calls` tab after calling\n\n## Security\n* The webhooks are open by default. Before real use, add **Header Auth** to each Webhook node and send the same header from Vapi\n* Store only the minimum customer data needed and restrict access to the Sheet",
+        "height": 1472,
+        "width": 720,
+        "color": 4
+      },
+      "id": "fdcd187d-66a4-4def-a5bd-d62805968e98",
+      "name": "Sticky Note - Overview",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -720,
+        432
+      ],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "content": "## 🔎 Search packages\nReturns matching tours for the caller's destination and budget.\n1. **Read** the `Packages` tab\n2. **Filter** by destination and budget per person (active packages only); one optional **upsell** up to 20% above budget\n3. **Reply** to Vapi with up to 3 packages and a short message the assistant can read out",
+        "height": 380,
+        "width": 1200,
+        "color": 4
+      },
+      "id": "fda17c4d-4d61-4e12-b401-858c817781db",
+      "name": "Sticky Note - Search",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        80,
+        -64
+      ],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "content": "## 📅 Book package\nReceives a **caller-confirmed** booking from Vapi and saves it.\n1. **Validate** required fields, a future travel date and `caller_confirmed = true`\n2. **Find** the package in the `Packages` tab (price comes from the sheet, never from the caller)\n3. **Normalize** the data and generate a unique `booking_id`, then **log** it in the `Bookings` tab\n4. **Confirm to Vapi** and **email the caller** (staff in BCC) in parallel",
+        "height": 676,
+        "width": 1944,
+        "color": 4
+      },
+      "id": "46e51ee6-3086-4303-9c79-44187063d0ca",
+      "name": "Sticky Note - Book",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        80,
+        352
+      ],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "content": "## 📞 Request consultant call (human fallback)\nFor callers who don't book, or who ask for a person.\n1. **Normalize** the details and create a `lead_id` and `request_id`\n2. **Log** the caller in the `Leads` tab (`status = unconfirmed`), then in the `Consultant_Calls` tab (`status = pending`)\n3. **Email staff** and **reply to Vapi** in parallel",
+        "height": 700,
+        "width": 1700,
+        "color": 3
+      },
+      "id": "948bcaac-4a99-4601-b809-fe16b230b1d3",
+      "name": "Sticky Note - Callback",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        80,
+        1072
+      ],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "content": "## ✏️ Manage booking — validate, find and route\nCancels a booking or changes its date / number of travellers after caller confirmation.\n1. **Validate** `action` (cancel / update), `booking_id`, `phone_number` and `caller_confirmed`\n2. **Read** the `Bookings` tab and **find** the active booking matching both ID and phone (last 10 digits)\n3. **Route**: found → cancel or update (the total is recalculated); not found → tell Vapi",
+        "height": 768,
+        "width": 2016,
+        "color": 6
+      },
+      "id": "5ab41bbc-16fd-42b5-b52f-c79706e7b14c",
+      "name": "Sticky Note - Manage",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        80,
+        1824
+      ],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "travel_search_packages",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "9e92302b-bf2c-4c02-bb71-a301e57d56d9",
+      "name": "Search Packages Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "position": [
+        128,
+        144
+      ],
+      "typeVersion": 2,
+      "webhookId": "2428e372-731d-4763-af73-3b8f901d1be9"
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_GOOGLE_SHEET_ID"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Packages"
+        },
+        "options": {}
+      },
+      "id": "8ba8afc5-dd0c-4a4b-9041-f1924810cc65",
+      "name": "Read Packages",
+      "type": "n8n-nodes-base.googleSheets",
+      "position": [
+        304,
+        144
+      ],
+      "typeVersion": 4.5,
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $('Search Packages Webhook').first().json.body ?? {};\nconst dest = String(body.destination ?? '').trim().toLowerCase();\nconst style = String(body.travel_style ?? '').trim().toLowerCase();\nconst groupSize = Math.max(1, Math.round(Number(body.group_size) || 1));\nconst budgetPP = (Number(body.budget) || 0) / groupSize;\nif (!dest || budgetPP <= 0) return [{ json: { found: false, count: 0, packages: [], upsell: null, message: 'I still need the destination, the total budget and the number of travellers.' } }];\n\nconst rows = $input.all().map((i) => i.json).filter((r) => r.package_id && String(r.active ?? 'TRUE').toLowerCase() !== 'false');\nconst match = rows.filter((r) => { const d = String(r.destination ?? '').toLowerCase(); return d && (d.includes(dest) || dest.includes(d)); });\nconst shape = (r) => ({ package_id: r.package_id, title: r.title, duration_days: Number(r.duration_days), price_per_person: Number(r.price_per_person), total_price: Number(r.price_per_person) * groupSize, category: r.category, inclusions: r.inclusions });\nconst score = (r) => Number(r.price_per_person) / 1000 + (style && String(r.category ?? '').toLowerCase().includes(style) ? 100 : 0);\n\nconst packages = match.filter((r) => Number(r.price_per_person) <= budgetPP).sort((a, b) => score(b) - score(a)).slice(0, 3).map(shape);\nconst up = match.filter((r) => Number(r.price_per_person) > budgetPP && Number(r.price_per_person) <= budgetPP * 1.2).sort((a, b) => a.price_per_person - b.price_per_person)[0];\nconst upsell = up ? shape(up) : null;\n\nlet message;\nif (packages.length) {\n  message = 'I found ' + packages.length + ' package(s) within budget: ' + packages.map((p) => p.title + ' (' + p.duration_days + ' days, $' + p.price_per_person + ' per person)').join('; ') + '.';\n  if (upsell) message += ' A slightly higher option: ' + upsell.title + ' at $' + upsell.price_per_person + ' per person.';\n} else if (upsell) {\n  message = 'Nothing fits the exact budget, but ' + upsell.title + ' is close at $' + upsell.price_per_person + ' per person.';\n} else {\n  message = 'No package matches that destination and budget. Offer a consultant call if the caller still wants help.';\n}\nreturn [{ json: { found: packages.length > 0 || !!upsell, count: packages.length, packages, upsell, message } }];"
+      },
+      "id": "ef82ff5e-9219-43d8-9ba5-b83016de6058",
+      "name": "Filter Packages",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        480,
+        144
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"success\": true, \"found\": $json.found, \"count\": $json.count, \"packages\": $json.packages, \"upsell\": $json.upsell, \"message\": $json.message } }}",
+        "options": {}
+      },
+      "id": "f286131d-5e43-48fd-9f92-5403e755dd77",
+      "name": "Respond to Vapi - Search",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "position": [
+        640,
+        144
+      ],
+      "typeVersion": 1.1
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "travel_book_package",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "a2b117d5-5eb0-41d3-851a-e2cf73843c79",
+      "name": "Book Package Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "position": [
+        144,
+        640
+      ],
+      "typeVersion": 2,
+      "webhookId": "ebc3a18c-fec9-4d70-a5b8-04804a873dea"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body ?? {};\nconst required = ['name', 'phone_number', 'email', 'package_id', 'travel_date', 'group_size'];\nconst missing = required.filter((field) => body[field] === undefined || body[field] === null || String(body[field]).trim() === '');\nif (missing.length) throw new Error(`Missing required booking fields: ${missing.join(', ')}`);\nif (body.caller_confirmed !== true) throw new Error('Booking requires explicit caller confirmation.');\nif (!String(body.email).includes('@')) throw new Error('A valid email is required.');\nif (!/^\\d{4}-\\d{2}-\\d{2}$/.test(String(body.travel_date)) || String(body.travel_date) < $now.toFormat('yyyy-LL-dd')) throw new Error('travel_date must be a future date in YYYY-MM-DD format.');\nreturn $input.all();"
+      },
+      "id": "c0728332-8348-4091-bf39-a46fe3484ec2",
+      "name": "Validate Booking Request",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        336,
+        640
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_GOOGLE_SHEET_ID"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Packages"
+        },
+        "options": {}
+      },
+      "id": "276e9932-5b76-4e80-9730-03b330690985",
+      "name": "Read Packages for Booking",
+      "type": "n8n-nodes-base.googleSheets",
+      "position": [
+        528,
+        640
+      ],
+      "typeVersion": 4.5,
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $('Book Package Webhook').first().json.body ?? {};\nconst id = String(body.package_id ?? '').trim().toUpperCase();\nconst pkg = $input.all().map((i) => i.json).find((r) => String(r.package_id ?? '').trim().toUpperCase() === id && String(r.active ?? 'TRUE').toLowerCase() !== 'false');\nif (!pkg) return [{ json: { found: false } }];\nreturn [{ json: { found: true, package_id: pkg.package_id, package_title: pkg.title, destination: pkg.destination, price_per_person: pkg.price_per_person, duration_days: pkg.duration_days, inclusions: pkg.inclusions, best_season: pkg.best_season, visa_note: pkg.visa_note } }];"
+      },
+      "id": "6b848a3e-091a-4b5f-b854-fbbacc2e736d",
+      "name": "Find Package",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        704,
+        640
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "9570cde4-49bf-442c-b39b-9a71225f9a24",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              },
+              "leftValue": "={{ $json.found }}",
+              "rightValue": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "3156cb46-8154-4f1d-a2f8-7355179ffb60",
+      "name": "Package Found",
+      "type": "n8n-nodes-base.if",
+      "position": [
+        864,
+        640
+      ],
+      "typeVersion": 2.2
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "28e6ea71-1e9b-408d-8836-4bd614541e43",
+              "name": "booking_id",
+              "type": "string",
+              "value": "={{ 'BK-' + $now.toFormat('yyMMdd') + '-' + $execution.id }}"
+            },
+            {
+              "id": "f6b7859f-f28c-4bbf-a9c1-1b808842eab0",
+              "name": "name",
+              "type": "string",
+              "value": "={{ $('Book Package Webhook').first().json.body.name }}"
+            },
+            {
+              "id": "bf648509-a40d-4822-8b0d-a4ac92063949",
+              "name": "phone_number",
+              "type": "string",
+              "value": "={{ $('Book Package Webhook').first().json.body.phone_number }}"
+            },
+            {
+              "id": "4510dc4c-e1bc-4447-bb1d-6b624ab59edb",
+              "name": "email",
+              "type": "string",
+              "value": "={{ String($('Book Package Webhook').first().json.body.email).trim().toLowerCase() }}"
+            },
+            {
+              "id": "2414f9b0-ba50-4cf9-8147-d6bd45fa2f74",
+              "name": "package_id",
+              "type": "string",
+              "value": "={{ $json.package_id }}"
+            },
+            {
+              "id": "c3b98c6d-7bfa-4c49-80b6-793534751402",
+              "name": "package_title",
+              "type": "string",
+              "value": "={{ $json.package_title }}"
+            },
+            {
+              "id": "8736af6a-208b-4a70-8862-4d35bb672fba",
+              "name": "destination",
+              "type": "string",
+              "value": "={{ $json.destination }}"
+            },
+            {
+              "id": "7a7cc402-99c1-48e5-a66c-5643c589293a",
+              "name": "travel_date",
+              "type": "string",
+              "value": "={{ $('Book Package Webhook').first().json.body.travel_date }}"
+            },
+            {
+              "id": "02e2c36d-da7a-4f95-a222-2125db84becf",
+              "name": "group_size",
+              "type": "string",
+              "value": "={{ $('Book Package Webhook').first().json.body.group_size }}"
+            },
+            {
+              "id": "3d949710-57f0-47c8-8a62-5d414ce8b085",
+              "name": "price_per_person",
+              "type": "string",
+              "value": "={{ $json.price_per_person }}"
+            },
+            {
+              "id": "2cfa666f-1e39-43ce-b844-be0a62c0aa5f",
+              "name": "total_price",
+              "type": "string",
+              "value": "={{ Number($json.price_per_person) * Number($('Book Package Webhook').first().json.body.group_size) }}"
+            },
+            {
+              "id": "31cd4f4b-f224-455e-900e-e1b191250cfc",
+              "name": "status",
+              "type": "string",
+              "value": "confirmed"
+            },
+            {
+              "id": "90abff5e-03e5-4522-a17d-07161224c78d",
+              "name": "conversation_id",
+              "type": "string",
+              "value": "={{ $('Book Package Webhook').first().json.body.conversation_id || $('Book Package Webhook').first().json.body.call_id || \"unknown\" }}"
+            },
+            {
+              "id": "d9609209-8aff-4881-b6c1-1ab22b06e690",
+              "name": "created_at",
+              "type": "string",
+              "value": "={{ $now.toISO() }}"
+            },
+            {
+              "id": "630a3c8d-a2f7-4e7c-bd68-844f5f1c8470",
+              "name": "updated_at",
+              "type": "string",
+              "value": "={{ $now.toISO() }}"
+            },
+            {
+              "id": "ca9e1185-9c8b-47d0-837d-9c2441ac39d8",
+              "name": "duration_days",
+              "type": "string",
+              "value": "={{ $json.duration_days }}"
+            },
+            {
+              "id": "22dd196d-10e4-44bd-8dc3-5983eed23902",
+              "name": "inclusions",
+              "type": "string",
+              "value": "={{ $json.inclusions }}"
+            },
+            {
+              "id": "5faad3d8-d29b-4bc6-927e-50699635bd41",
+              "name": "best_season",
+              "type": "string",
+              "value": "={{ $json.best_season }}"
+            },
+            {
+              "id": "144715ac-100e-402e-a705-5a940159c805",
+              "name": "visa_note",
+              "type": "string",
+              "value": "={{ $json.visa_note }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "4c14e5cf-f5b9-41d0-86ca-2fa022c153ee",
+      "name": "Normalize Booking Data",
+      "type": "n8n-nodes-base.set",
+      "position": [
+        1072,
+        512
+      ],
+      "typeVersion": 3.4
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_GOOGLE_SHEET_ID"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Bookings"
+        },
+        "columns": {
+          "value": {
+            "booking_id": "={{ $json.booking_id }}",
+            "name": "={{ $json.name }}",
+            "phone_number": "={{ $json.phone_number }}",
+            "email": "={{ $json.email }}",
+            "package_id": "={{ $json.package_id }}",
+            "package_title": "={{ $json.package_title }}",
+            "destination": "={{ $json.destination }}",
+            "travel_date": "={{ $json.travel_date }}",
+            "group_size": "={{ $json.group_size }}",
+            "price_per_person": "={{ $json.price_per_person }}",
+            "total_price": "={{ $json.total_price }}",
+            "status": "={{ $json.status }}",
+            "conversation_id": "={{ $json.conversation_id }}",
+            "created_at": "={{ $json.created_at }}",
+            "updated_at": "={{ $json.updated_at }}"
+          },
+          "schema": [
+            {
+              "id": "booking_id",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "booking_id",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "name",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "name",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "phone_number",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "phone_number",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "email",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "email",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "package_id",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "package_id",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "package_title",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "package_title",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "destination",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "destination",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "travel_date",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "travel_date",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "group_size",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "group_size",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "price_per_person",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "price_per_person",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "total_price",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "total_price",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "status",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "status",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "conversation_id",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "conversation_id",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "created_at",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "created_at",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "updated_at",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "updated_at",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            }
+          ],
+          "mappingMode": "defineBelow",
+          "matchingColumns": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {
+          "cellFormat": "RAW"
+        }
+      },
+      "id": "c9082ead-76f0-4984-91f3-4783b9cf8e07",
+      "name": "Log Booking to Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "position": [
+        1296,
+        512
+      ],
+      "typeVersion": 4.5
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "c23e6757-631f-4b0e-b5ea-b515f5adca23",
+              "name": "message",
+              "type": "string",
+              "value": "=Booking {{ $('Normalize Booking Data').first().json.booking_id }} is confirmed: {{ $('Normalize Booking Data').first().json.package_title }} on {{ $('Normalize Booking Data').first().json.travel_date }} for {{ $('Normalize Booking Data').first().json.group_size }} traveller(s), total ${{ $('Normalize Booking Data').first().json.total_price }}. A confirmation email is on its way and a consultant will share payment details."
+            },
+            {
+              "id": "d2202266-30d9-4027-9a5a-83663e8fc4a1",
+              "name": "status",
+              "type": "string",
+              "value": "confirmed"
+            },
+            {
+              "id": "927047ed-a845-4e5a-b0a3-e3fd5d4cabe3",
+              "name": "booking_id",
+              "type": "string",
+              "value": "={{ $('Normalize Booking Data').first().json.booking_id }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "4f77da54-9af6-404d-88b7-67016928373e",
+      "name": "Build Booking Confirmation",
+      "type": "n8n-nodes-base.set",
+      "position": [
+        1520,
+        400
+      ],
+      "typeVersion": 3.4
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"success\": $json.status !== \"not_found\", \"status\": $json.status, \"booking_id\": $json.booking_id || null, \"message\": $json.message } }}",
+        "options": {}
+      },
+      "id": "2a8da541-0a26-40af-8d0b-d0f650162c8b",
+      "name": "Respond to Vapi - Booking",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "position": [
+        1824,
+        768
+      ],
+      "typeVersion": 1.1
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $('Normalize Booking Data').first().json.email }}",
+        "subject": "=Booking confirmed: {{ $('Normalize Booking Data').first().json.package_title }} ({{ $('Normalize Booking Data').first().json.booking_id }})",
+        "message": "=<div style=\"font-family:Arial,sans-serif;max-width:600px;\"><h2>Your booking is confirmed ✈️</h2>Hi {{ $('Normalize Booking Data').first().json.name.split(' ')[0] }},<br><br>Thank you for booking with us. Here are your details:<br><br><strong>Booking ID:</strong> {{ $('Normalize Booking Data').first().json.booking_id }}<br><strong>Package:</strong> {{ $('Normalize Booking Data').first().json.package_title }} ({{ $('Normalize Booking Data').first().json.duration_days }} days)<br><strong>Destination:</strong> {{ $('Normalize Booking Data').first().json.destination }}<br><strong>Travel date:</strong> {{ $('Normalize Booking Data').first().json.travel_date }}<br><strong>Travellers:</strong> {{ $('Normalize Booking Data').first().json.group_size }}<br><strong>Price per person:</strong> ${{ $('Normalize Booking Data').first().json.price_per_person }}<br><strong>Total:</strong> ${{ $('Normalize Booking Data').first().json.total_price }}<br><strong>Included:</strong> {{ $('Normalize Booking Data').first().json.inclusions }}<br><strong>Best season:</strong> {{ $('Normalize Booking Data').first().json.best_season }}<br><br><em>Visa note: {{ $('Normalize Booking Data').first().json.visa_note }} (general guidance only, please confirm with the embassy).</em><br><br>One of our consultants will contact you shortly with payment details. To change or cancel, call us and quote your booking ID.<br><br>Warm regards,<br>Horizon Travels</div>",
+        "options": {
+          "appendAttribution": false,
+          "bccList": "YOUR_STAFF_EMAIL@example.com"
+        }
+      },
+      "id": "e6e7083b-5fed-4762-bfca-818bb83ca35a",
+      "name": "Send Customer Confirmation Email",
+      "type": "n8n-nodes-base.gmail",
+      "position": [
+        1520,
+        640
+      ],
+      "typeVersion": 2.1,
+      "webhookId": "919c00f0-af45-44bc-b078-c886b4614a1b"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "d9e4aaa4-4bc2-45f5-8042-9bf21d27316b",
+              "name": "message",
+              "type": "string",
+              "value": "I could not find that package. Please search packages again."
+            },
+            {
+              "id": "2e92e4e2-31d8-4e65-be80-377a08955a9a",
+              "name": "status",
+              "type": "string",
+              "value": "not_found"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "76cfd112-6d02-44e8-8f04-c63fbf689620",
+      "name": "Message - Package Not Found",
+      "type": "n8n-nodes-base.set",
+      "position": [
+        1056,
+        768
+      ],
+      "typeVersion": 3.4
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "travel_request_consultant_call",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "ea63e704-d01c-4907-a053-e4613ae464f7",
+      "name": "Callback Request Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "position": [
+        128,
+        1376
+      ],
+      "typeVersion": 2,
+      "webhookId": "c45697c4-ba37-49d0-aed4-2d9db17ce409"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "8878e8b9-8f18-40e0-937a-7b1966302c89",
+              "name": "lead_id",
+              "type": "string",
+              "value": "={{ 'LD-' + $now.toFormat('yyMMdd') + '-' + $execution.id }}"
+            },
+            {
+              "id": "0d0c9cb2-24f1-4fd9-8c0f-7c086eb9b118",
+              "name": "request_id",
+              "type": "string",
+              "value": "={{ 'CR-' + $now.toFormat('yyMMdd') + '-' + $execution.id }}"
+            },
+            {
+              "id": "e64eba01-acd6-42cf-af26-9ef5b9bf7abc",
+              "name": "name",
+              "type": "string",
+              "value": "={{ $json.body.name }}"
+            },
+            {
+              "id": "cdf766ff-25a5-43c8-bd2b-42b1adb51b0d",
+              "name": "phone_number",
+              "type": "string",
+              "value": "={{ $json.body.phone_number }}"
+            },
+            {
+              "id": "93b382aa-6689-4f5b-a3e2-2e3d6c8814e6",
+              "name": "email",
+              "type": "string",
+              "value": "={{ $json.body.email || '' }}"
+            },
+            {
+              "id": "21746160-65a8-4a77-9232-be1732338b0a",
+              "name": "destination",
+              "type": "string",
+              "value": "={{ $json.body.destination || '' }}"
+            },
+            {
+              "id": "e8f9ef2c-9c20-4c60-a54d-3ff0333b011e",
+              "name": "budget",
+              "type": "string",
+              "value": "={{ $json.body.budget || '' }}"
+            },
+            {
+              "id": "53fa8238-979e-4aca-85f5-ac92956bf6d3",
+              "name": "group_size",
+              "type": "string",
+              "value": "={{ $json.body.group_size || '' }}"
+            },
+            {
+              "id": "3c9a79b0-aa13-44f7-9e5a-613b6b53d500",
+              "name": "package_id",
+              "type": "string",
+              "value": "={{ $json.body.package_id || '' }}"
+            },
+            {
+              "id": "0ac3ffea-c164-43ae-b86c-a74ec44b73a3",
+              "name": "notes",
+              "type": "string",
+              "value": "={{ $json.body.notes || '' }}"
+            },
+            {
+              "id": "4c1ed056-8b5b-4454-b6a4-a37fc42c762d",
+              "name": "reason",
+              "type": "string",
+              "value": "={{ $json.body.reason || 'Caller asked to speak with a consultant' }}"
+            },
+            {
+              "id": "2d7919c4-de15-411e-ae58-81aacd7600bf",
+              "name": "preferred_time",
+              "type": "string",
+              "value": "={{ $json.body.preferred_time }}"
+            },
+            {
+              "id": "5ea0ee4c-cbe5-45ac-952f-191f5eb953bb",
+              "name": "lead_status",
+              "type": "string",
+              "value": "unconfirmed"
+            },
+            {
+              "id": "8ae5850d-64ef-4b66-94ef-a7f2e7c198c4",
+              "name": "call_status",
+              "type": "string",
+              "value": "pending"
+            },
+            {
+              "id": "f4fe99c0-1bd6-4385-be81-722dd2eb9531",
+              "name": "conversation_id",
+              "type": "string",
+              "value": "={{ $json.body.conversation_id || $json.body.call_id || \"unknown\" }}"
+            },
+            {
+              "id": "971c8390-4f60-45cd-aab1-fac84c2eb76f",
+              "name": "created_at",
+              "type": "string",
+              "value": "={{ $now.toISO() }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "6f02ef7b-2e8d-4802-ab09-332ba60e4515",
+      "name": "Normalize Lead and Call Data",
+      "type": "n8n-nodes-base.set",
+      "position": [
+        320,
+        1376
+      ],
+      "typeVersion": 3.4
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_GOOGLE_SHEET_ID"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Leads"
+        },
+        "columns": {
+          "value": {
+            "lead_id": "={{ $json.lead_id }}",
+            "name": "={{ $json.name }}",
+            "phone_number": "={{ $json.phone_number }}",
+            "email": "={{ $json.email }}",
+            "destination": "={{ $json.destination }}",
+            "budget": "={{ $json.budget }}",
+            "group_size": "={{ $json.group_size }}",
+            "package_id": "={{ $json.package_id }}",
+            "notes": "={{ $json.notes }}",
+            "status": "={{ $json.lead_status }}",
+            "conversation_id": "={{ $json.conversation_id }}",
+            "created_at": "={{ $json.created_at }}"
+          },
+          "schema": [
+            {
+              "id": "lead_id",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "lead_id",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "name",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "name",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "phone_number",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "phone_number",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "email",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "email",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "destination",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "destination",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "budget",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "budget",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "group_size",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "group_size",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "package_id",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "package_id",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "notes",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "notes",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "status",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "status",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "conversation_id",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "conversation_id",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "created_at",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "created_at",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            }
+          ],
+          "mappingMode": "defineBelow",
+          "matchingColumns": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {
+          "cellFormat": "RAW"
+        }
+      },
+      "id": "b4026a59-3143-499d-896b-c025b7ef8364",
+      "name": "Log Lead to Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "position": [
+        512,
+        1376
+      ],
+      "typeVersion": 4.5
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_GOOGLE_SHEET_ID"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Consultant_Calls"
+        },
+        "columns": {
+          "value": {
+            "request_id": "={{ $('Normalize Lead and Call Data').first().json.request_id }}",
+            "lead_id": "={{ $('Normalize Lead and Call Data').first().json.lead_id }}",
+            "name": "={{ $('Normalize Lead and Call Data').first().json.name }}",
+            "phone_number": "={{ $('Normalize Lead and Call Data').first().json.phone_number }}",
+            "reason": "={{ $('Normalize Lead and Call Data').first().json.reason }}",
+            "preferred_time": "={{ $('Normalize Lead and Call Data').first().json.preferred_time }}",
+            "status": "={{ $('Normalize Lead and Call Data').first().json.call_status }}",
+            "created_at": "={{ $('Normalize Lead and Call Data').first().json.created_at }}"
+          },
+          "schema": [
+            {
+              "id": "request_id",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "request_id",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "lead_id",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "lead_id",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "name",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "name",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "phone_number",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "phone_number",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "reason",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "reason",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "preferred_time",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "preferred_time",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "status",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "status",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "created_at",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "created_at",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            }
+          ],
+          "mappingMode": "defineBelow",
+          "matchingColumns": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {
+          "cellFormat": "RAW"
+        }
+      },
+      "id": "6c5c2eb2-08dc-4932-a665-0385e101ec0f",
+      "name": "Log Consultant Call to Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "position": [
+        704,
+        1376
+      ],
+      "typeVersion": 4.5
+    },
+    {
+      "parameters": {
+        "sendTo": "YOUR_STAFF_EMAIL@example.com",
+        "subject": "=Consultant callback: {{ $('Normalize Lead and Call Data').first().json.name }} — {{ $('Normalize Lead and Call Data').first().json.preferred_time }}",
+        "message": "=<strong>New consultant callback (unconfirmed lead)</strong><br><br><strong>Name:</strong> {{ $('Normalize Lead and Call Data').first().json.name }}<br><strong>Phone:</strong> {{ $('Normalize Lead and Call Data').first().json.phone_number }}<br><strong>Preferred time:</strong> {{ $('Normalize Lead and Call Data').first().json.preferred_time }}<br><strong>Reason:</strong> {{ $('Normalize Lead and Call Data').first().json.reason }}<br><br><strong>Destination:</strong> {{ $('Normalize Lead and Call Data').first().json.destination }}<br><strong>Budget (total):</strong> {{ $('Normalize Lead and Call Data').first().json.budget }}<br><strong>Travellers:</strong> {{ $('Normalize Lead and Call Data').first().json.group_size }}<br><strong>Package of interest:</strong> {{ $('Normalize Lead and Call Data').first().json.package_id }}<br><strong>Email:</strong> {{ $('Normalize Lead and Call Data').first().json.email }}<br><strong>Notes:</strong> {{ $('Normalize Lead and Call Data').first().json.notes }}<br><br>Lead {{ $('Normalize Lead and Call Data').first().json.lead_id }} · Request {{ $('Normalize Lead and Call Data').first().json.request_id }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "0559f04f-31d6-4353-919a-a1442d42186c",
+      "name": "Send Staff Callback Email",
+      "type": "n8n-nodes-base.gmail",
+      "position": [
+        944,
+        1488
+      ],
+      "typeVersion": 2.1,
+      "webhookId": "2284f730-04c6-49be-913d-445cf643e1fd"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "7a7ed900-56d8-42d1-b1df-c403107da1c4",
+              "name": "message",
+              "type": "string",
+              "value": "=Done. One of our travel consultants will call you around {{ $('Normalize Lead and Call Data').first().json.preferred_time }}."
+            },
+            {
+              "id": "8ed5fdae-ca5f-4e5c-b6d4-61898bd14be8",
+              "name": "status",
+              "type": "string",
+              "value": "callback_requested"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "9138f883-d3cb-48eb-bc4a-292346dea188",
+      "name": "Build Callback Response",
+      "type": "n8n-nodes-base.set",
+      "position": [
+        944,
+        1280
+      ],
+      "typeVersion": 3.4
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"success\": true, \"status\": $json.status, \"message\": $json.message } }}",
+        "options": {}
+      },
+      "id": "15716dbe-63d1-48e4-b0a0-e709301c6e99",
+      "name": "Respond to Vapi - Callback",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "position": [
+        1152,
+        1280
+      ],
+      "typeVersion": 1.1
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "travel_manage_booking",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "7cd1a06a-e9bd-4806-be4d-221d3ea0b5ec",
+      "name": "Manage Booking Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "position": [
+        144,
+        2096
+      ],
+      "typeVersion": 2,
+      "webhookId": "950f62f0-a7bf-48ad-8150-658407fa13b0"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body ?? {};\nconst action = String(body.action ?? '').toLowerCase();\nif (!['cancel', 'update'].includes(action)) throw new Error('action must be cancel or update.');\nif (!body.booking_id || !body.phone_number) throw new Error('booking_id and phone_number are required.');\nif (body.caller_confirmed !== true) throw new Error('Changes require explicit caller confirmation.');\nif (action === 'update' && !body.new_travel_date && !body.new_group_size) throw new Error('new_travel_date or new_group_size is required for updating.');\nif (body.new_travel_date && (!/^\\d{4}-\\d{2}-\\d{2}$/.test(String(body.new_travel_date)) || String(body.new_travel_date) < $now.toFormat('yyyy-LL-dd'))) throw new Error('new_travel_date must be a future date in YYYY-MM-DD format.');\nreturn $input.all();"
+      },
+      "id": "91e4b95d-4f97-495d-91d2-e834f3bc3e9f",
+      "name": "Validate Manage Request",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        320,
+        2096
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_GOOGLE_SHEET_ID"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Bookings"
+        },
+        "options": {}
+      },
+      "id": "a181f031-d69c-4a65-ab26-6f43886cb30d",
+      "name": "Read Bookings for Lookup",
+      "type": "n8n-nodes-base.googleSheets",
+      "position": [
+        496,
+        2096
+      ],
+      "typeVersion": 4.5,
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $('Manage Booking Webhook').first().json.body ?? {};\nconst last10 = (v) => { const d = String(v ?? '').replace(/\\D/g, ''); return d.length > 10 ? d.slice(-10) : d; };\nconst id = String(body.booking_id ?? '').trim().toUpperCase();\nconst phone = last10(body.phone_number);\nconst match = $input.all().find(({ json }) =>\n  String(json.booking_id ?? '').trim().toUpperCase() === id &&\n  last10(json.phone_number) === phone &&\n  String(json.status ?? '').trim().toLowerCase() !== 'cancelled');\nif (!match) return [{ json: { found: false } }];\nreturn [{ json: { ...match.json, found: true, row_number: match.json.row_number } }];"
+      },
+      "id": "4261b2de-f408-4b9b-950b-ae813d7ab8bf",
+      "name": "Find Matching Booking",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        672,
+        2096
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "792c75a4-1aa5-4e4a-b425-2f9a0ce28d63",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              },
+              "leftValue": "={{ $json.found }}",
+              "rightValue": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "f50d4ed8-7d63-4140-8c11-fdc0946b47d0",
+      "name": "Booking Found",
+      "type": "n8n-nodes-base.if",
+      "position": [
+        848,
+        2096
+      ],
+      "typeVersion": 2.2
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 1
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "805438b4-2e8a-44c1-98ae-fbea0bdad845",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              },
+              "leftValue": "={{ $('Manage Booking Webhook').first().json.body.action }}",
+              "rightValue": "cancel"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "73e095c9-46c9-42cf-90fd-e4bce2cf4d36",
+      "name": "Is Cancel Action",
+      "type": "n8n-nodes-base.if",
+      "position": [
+        1056,
+        2080
+      ],
+      "typeVersion": 2.2
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_GOOGLE_SHEET_ID"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Bookings"
+        },
+        "columns": {
+          "value": {
+            "status": "cancelled",
+            "updated_at": "={{ $now.toISO() }}",
+            "row_number": "={{ $json.row_number }}"
+          },
+          "schema": [
+            {
+              "id": "booking_id",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "booking_id",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "name",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "name",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "phone_number",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "phone_number",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "email",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "email",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "package_id",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "package_id",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "package_title",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "package_title",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "destination",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "destination",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "travel_date",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "travel_date",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "group_size",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "group_size",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "price_per_person",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "price_per_person",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "total_price",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "total_price",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "status",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "status",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "conversation_id",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "conversation_id",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "created_at",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "created_at",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "updated_at",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "updated_at",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "row_number",
+              "type": "number",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "row_number",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "readOnly": true
+            }
+          ],
+          "mappingMode": "defineBelow",
+          "matchingColumns": [
+            "row_number"
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {
+          "cellFormat": "RAW"
+        }
+      },
+      "id": "205abb8c-6111-4b0a-9e6f-8e6800ccfe73",
+      "name": "Mark Booking Cancelled",
+      "type": "n8n-nodes-base.googleSheets",
+      "position": [
+        1280,
+        1968
+      ],
+      "typeVersion": 4.5
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "36ba64f8-091c-4a2c-bb3c-d926ce7fbd9f",
+              "name": "message",
+              "type": "string",
+              "value": "=Booking {{ $('Find Matching Booking').first().json.booking_id }} has been cancelled."
+            },
+            {
+              "id": "9bb0f0fb-be6a-4b0e-a305-c93f89c9d427",
+              "name": "status",
+              "type": "string",
+              "value": "cancelled"
+            },
+            {
+              "id": "67d7cb69-1126-48d8-b720-9004f1431dd4",
+              "name": "booking_id",
+              "type": "string",
+              "value": "={{ $('Find Matching Booking').first().json.booking_id }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "e7a2c2ec-cb7d-417e-90f1-628f6a5b1db8",
+      "name": "Message - Cancelled",
+      "type": "n8n-nodes-base.set",
+      "position": [
+        1472,
+        1968
+      ],
+      "typeVersion": 3.4
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $('Manage Booking Webhook').first().json.body ?? {};\nconst old = $input.first().json;\nconst groupSize = body.new_group_size ? Math.max(1, Math.round(Number(body.new_group_size))) : Number(old.group_size);\nreturn [{ json: {\n  row_number: old.row_number,\n  travel_date: body.new_travel_date || old.travel_date,\n  group_size: groupSize,\n  total_price: groupSize * Number(old.price_per_person),\n  updated_at: $now.toISO(),\n} }];"
+      },
+      "id": "ab458cd9-bb46-4422-aad1-74804662efd5",
+      "name": "Merge Update Fields",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        1280,
+        2192
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_GOOGLE_SHEET_ID"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Bookings"
+        },
+        "columns": {
+          "value": {
+            "travel_date": "={{ $json.travel_date }}",
+            "group_size": "={{ $json.group_size }}",
+            "total_price": "={{ $json.total_price }}",
+            "updated_at": "={{ $json.updated_at }}",
+            "row_number": "={{ $json.row_number }}"
+          },
+          "schema": [
+            {
+              "id": "booking_id",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "booking_id",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "name",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "name",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "phone_number",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "phone_number",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "email",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "email",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "package_id",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "package_id",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "package_title",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "package_title",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "destination",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "destination",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "travel_date",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "travel_date",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "group_size",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "group_size",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "price_per_person",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "price_per_person",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "total_price",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "total_price",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "status",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "status",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "conversation_id",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "conversation_id",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "created_at",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "created_at",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "updated_at",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "updated_at",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "row_number",
+              "type": "number",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "row_number",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "readOnly": true
+            }
+          ],
+          "mappingMode": "defineBelow",
+          "matchingColumns": [
+            "row_number"
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {
+          "cellFormat": "RAW"
+        }
+      },
+      "id": "0aa988cf-010a-4266-abb0-9c59fb07e0f6",
+      "name": "Update Booking Details",
+      "type": "n8n-nodes-base.googleSheets",
+      "position": [
+        1472,
+        2192
+      ],
+      "typeVersion": 4.5
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "c006056c-13b2-4f69-bc67-9873cf5f1d6b",
+              "name": "message",
+              "type": "string",
+              "value": "=Booking {{ $('Find Matching Booking').first().json.booking_id }} is updated: travel date {{ $('Merge Update Fields').first().json.travel_date }}, {{ $('Merge Update Fields').first().json.group_size }} traveller(s), new total ${{ $('Merge Update Fields').first().json.total_price }}."
+            },
+            {
+              "id": "74993b80-b552-4389-af8b-f2334b41a633",
+              "name": "status",
+              "type": "string",
+              "value": "updated"
+            },
+            {
+              "id": "5542e4b9-4c25-41fc-b2fa-e49291f35dd9",
+              "name": "booking_id",
+              "type": "string",
+              "value": "={{ $('Find Matching Booking').first().json.booking_id }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "7a4498e8-f8d9-4c62-a7b6-88f57ef76516",
+      "name": "Message - Updated",
+      "type": "n8n-nodes-base.set",
+      "position": [
+        1920,
+        2192
+      ],
+      "typeVersion": 3.4
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "17c56afd-edf5-4ab7-96f6-46c117a96b6c",
+              "name": "message",
+              "type": "string",
+              "value": "I could not find an active booking matching that booking ID and phone number."
+            },
+            {
+              "id": "96ab251d-0c40-4e7d-9cff-6296acd26fc6",
+              "name": "status",
+              "type": "string",
+              "value": "not_found"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "890ee4a8-78e7-460c-9f5d-a759156f9312",
+      "name": "Message - Not Found",
+      "type": "n8n-nodes-base.set",
+      "position": [
+        1472,
+        2400
+      ],
+      "typeVersion": 3.4
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"success\": $json.status !== \"not_found\", \"status\": $json.status, \"booking_id\": $json.booking_id || null, \"message\": $json.message } }}",
+        "options": {}
+      },
+      "id": "3987b3ed-03bc-4862-aba7-a142bbb1b39e",
+      "name": "Respond to Vapi - Manage",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "position": [
+        1920,
+        1968
+      ],
+      "typeVersion": 1.1
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Search Packages Webhook": {
+      "main": [
+        [
+          {
+            "node": "Read Packages",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Packages": {
+      "main": [
+        [
+          {
+            "node": "Filter Packages",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Packages": {
+      "main": [
+        [
+          {
+            "node": "Respond to Vapi - Search",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Book Package Webhook": {
+      "main": [
+        [
+          {
+            "node": "Validate Booking Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Booking Request": {
+      "main": [
+        [
+          {
+            "node": "Read Packages for Booking",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Packages for Booking": {
+      "main": [
+        [
+          {
+            "node": "Find Package",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Package": {
+      "main": [
+        [
+          {
+            "node": "Package Found",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Package Found": {
+      "main": [
+        [
+          {
+            "node": "Normalize Booking Data",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Message - Package Not Found",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Booking Data": {
+      "main": [
+        [
+          {
+            "node": "Log Booking to Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Booking to Sheet": {
+      "main": [
+        [
+          {
+            "node": "Build Booking Confirmation",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Send Customer Confirmation Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Booking Confirmation": {
+      "main": [
+        [
+          {
+            "node": "Respond to Vapi - Booking",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Message - Package Not Found": {
+      "main": [
+        [
+          {
+            "node": "Respond to Vapi - Booking",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Callback Request Webhook": {
+      "main": [
+        [
+          {
+            "node": "Normalize Lead and Call Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Lead and Call Data": {
+      "main": [
+        [
+          {
+            "node": "Log Lead to Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Lead to Sheet": {
+      "main": [
+        [
+          {
+            "node": "Log Consultant Call to Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Consultant Call to Sheet": {
+      "main": [
+        [
+          {
+            "node": "Send Staff Callback Email",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Build Callback Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Callback Response": {
+      "main": [
+        [
+          {
+            "node": "Respond to Vapi - Callback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manage Booking Webhook": {
+      "main": [
+        [
+          {
+            "node": "Validate Manage Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Manage Request": {
+      "main": [
+        [
+          {
+            "node": "Read Bookings for Lookup",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Bookings for Lookup": {
+      "main": [
+        [
+          {
+            "node": "Find Matching Booking",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Matching Booking": {
+      "main": [
+        [
+          {
+            "node": "Booking Found",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Booking Found": {
+      "main": [
+        [
+          {
+            "node": "Is Cancel Action",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Message - Not Found",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Cancel Action": {
+      "main": [
+        [
+          {
+            "node": "Mark Booking Cancelled",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Merge Update Fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark Booking Cancelled": {
+      "main": [
+        [
+          {
+            "node": "Message - Cancelled",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Update Fields": {
+      "main": [
+        [
+          {
+            "node": "Update Booking Details",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Booking Details": {
+      "main": [
+        [
+          {
+            "node": "Message - Updated",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Message - Cancelled": {
+      "main": [
+        [
+          {
+            "node": "Respond to Vapi - Manage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Message - Updated": {
+      "main": [
+        [
+          {
+            "node": "Respond to Vapi - Manage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Message - Not Found": {
+      "main": [
+        [
+          {
+            "node": "Respond to Vapi - Manage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "f21d8c61-1e19-4845-b6a6-9dfe637c13e5",
+  "meta": {
+    "instanceId": "19f785bfec424418983ae2884af3c31f6186d9295f360434818bf9be3a1f7bf8"
+  },
+  "nodeGroups": [],
+  "id": "TO3IAAmaScNKp6Ok",
+  "tags": []
+}

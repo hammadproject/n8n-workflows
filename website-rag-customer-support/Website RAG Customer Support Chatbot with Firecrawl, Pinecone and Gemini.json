@@ -1,0 +1,752 @@
+{
+  "name": "Website RAG Customer Support Chatbot with Firecrawl, Pinecone and Gemini",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "226ad2c8-2b50-41fb-8df9-34637db013a1",
+      "name": "When clicking 'Execute workflow'",
+      "type": "n8n-nodes-base.manualTrigger",
+      "position": [
+        -1824,
+        240
+      ],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "resource": "MapSearch",
+        "operation": "map",
+        "url": "https://example.com/",
+        "limit": 100,
+        "requestOptions": {}
+      },
+      "id": "23f31bac-4cea-42a0-833c-8031093ca7cf",
+      "name": "Map Website URLs",
+      "type": "@mendable/n8n-nodes-firecrawl.firecrawl",
+      "position": [
+        -1376,
+        272
+      ],
+      "retryOnFail": true,
+      "typeVersion": 1,
+      "credentials": {
+        "firecrawlApi": {
+          "id": "qNm3SDrgtEWjB4E4",
+          "name": "Firecrawl API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// input: { success: true, links: [ { url: \"...\" } ] }\n\nconst links = $json.links || [];\nconst seen = new Set();\n\nconst blockedKeywords = [\n  \"/press-blog\",\n  \"/newsletter\",\n  \"/assets-vault\",\n  \"press\",\n  \"gallery\",\n  \"project\",\n  \"newsletter\"\n];\n\nreturn links\n  .filter(link => {\n    let url = link.url;\n    if (!url) return false;\n\n    for (const keyword of blockedKeywords) {\n      if (url.includes(keyword)) return false;\n    }\n\n    if (url.includes(\".xml\")) return false;\n\n    url = url.endsWith(\"/\") ? url.slice(0, -1) : url;\n\n    if (seen.has(url)) return false;\n    seen.add(url);\n\n    link.url = url;\n    return true;\n  })\n  .map(link => ({ url: link.url }));\n"
+      },
+      "id": "0bacbdb3-5c4d-4e15-ba44-ee90af9f2871",
+      "name": "Filter and Normalize URLs",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        -1040,
+        272
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "439439b6-84fa-4631-bdaa-bce7f1fa40f8",
+      "name": "Process URLs One by One",
+      "type": "n8n-nodes-base.splitInBatches",
+      "position": [
+        -704,
+        272
+      ],
+      "typeVersion": 3
+    },
+    {
+      "parameters": {
+        "amount": 2
+      },
+      "id": "3f6af6e8-af5f-48ba-a0db-70ec1f0ff1d0",
+      "name": "Rate Limit Delay",
+      "type": "n8n-nodes-base.wait",
+      "position": [
+        -544,
+        272
+      ],
+      "typeVersion": 1.1,
+      "webhookId": "ee08282c-0f8e-44a2-b4cc-5de5ac48b323"
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.url }}",
+        "options": {
+          "redirect": {
+            "redirect": {
+              "followRedirects": true
+            }
+          }
+        }
+      },
+      "id": "b8df2ff7-c93c-4b26-8f64-1c62cb5c7d95",
+      "name": "Fetch Page Content",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        -368,
+        192
+      ],
+      "retryOnFail": true,
+      "typeVersion": 3,
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "f84fa14c-2e29-46ef-a914-2267eb52b815",
+              "name": "html",
+              "type": "string",
+              "value": "={{ $json.data ?? $json.html ?? \"\" }}"
+            },
+            {
+              "id": "096f51e1-e470-4fde-8d62-3338ffcc4f6b",
+              "name": "url",
+              "type": "string",
+              "value": "={{ $json.url ?? $('Process URLs One by One').item.json.url }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "7deb569d-a37a-4f4c-ab7b-94ee1e9b0c8f",
+      "name": "Extract HTML and URL",
+      "type": "n8n-nodes-base.set",
+      "position": [
+        -112,
+        192
+      ],
+      "typeVersion": 3.4
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const html = $json.html;\n\nconst text = html\n  .replace(/<script[\\s\\S]*?<\\/script>/gi, '')\n  .replace(/<style[\\s\\S]*?<\\/style>/gi, '')\n  .replace(/<[^>]+>/g, ' ')\n  .replace(/\\s+/g, ' ')\n  // Safety net: strip any lone/broken surrogate pairs (invalid unicode)\n  // that may already exist in the source HTML, e.g. from bad encoding.\n  .replace(/[\\uD800-\\uDFFF]/g, '')\n  .trim();\n\nreturn {\n  url: $json.url,\n  project_id: $json.project_id,\n  text\n};\n"
+      },
+      "id": "c191253f-f453-4d2f-9127-cbf65911b21b",
+      "name": "Clean HTML to Text",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        80,
+        192
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "aa3e5022-2d6d-43f6-bf87-9de112a3345f",
+              "operator": {
+                "type": "boolean",
+                "operation": "false",
+                "singleValue": true
+              },
+              "leftValue": "={{ $json.text > 50}}",
+              "rightValue": ""
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "97805b2e-7ab8-46f8-b189-d1cd7f78572e",
+      "name": "Check Text Length",
+      "type": "n8n-nodes-base.if",
+      "position": [
+        304,
+        192
+      ],
+      "typeVersion": 2.3
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $json.text || \"\";\nconst text = raw.replace(/\\s+/g, \" \").trim();\nconst chunkSize = 1000;\nconst overlap = 200;\n\n// Split by Unicode code points (not raw UTF-16 units) so we never cut\n// an emoji / special character in half and create invalid unicode.\nconst codePoints = Array.from(text);\n\nconst chunks = [];\nlet i = 0;\n\nwhile (i < codePoints.length) {\n  const chunk = codePoints.slice(i, i + chunkSize).join(\"\").trim();\n\n  if (chunk.length > 50) {\n    chunks.push({\n      content: chunk,\n      url: $json.url,\n      project_id: $json.project_id\n    });\n  }\n\n  i += chunkSize - overlap;\n}\n\nreturn chunks;\n"
+      },
+      "id": "afb91e79-599f-4fc6-bb19-b7f0c0e4fcb4",
+      "name": "Split Text into Chunks",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        528,
+        176
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "mode": "insert",
+        "pineconeIndex": {
+          "__rl": true,
+          "value": "YOUR_PINECONE_INDEX",
+          "mode": "id"
+        },
+        "embeddingBatchSize": 10,
+        "options": {
+          "pineconeNamespace": "YOUR_PINECONE_NAMESPACE"
+        }
+      },
+      "id": "9bc895bc-25d3-4531-92a5-1aabab79bf45",
+      "name": "Store in Vector Database",
+      "type": "@n8n/n8n-nodes-langchain.vectorStorePinecone",
+      "position": [
+        880,
+        256
+      ],
+      "typeVersion": 1.3,
+      "credentials": {
+        "pineconeApi": {
+          "id": "He7x7l2dSDnNI6LT",
+          "name": "Pinecone account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {
+          "metadata": {
+            "metadataValues": [
+              {
+                "name": "url",
+                "value": "={{ $json.url }}"
+              },
+              {
+                "name": "content",
+                "value": "={{ $json.content }}"
+              }
+            ]
+          }
+        }
+      },
+      "id": "475ac4c3-e0d5-4636-8735-874a6b56f4de",
+      "name": "Document Loader",
+      "type": "@n8n/n8n-nodes-langchain.documentDefaultDataLoader",
+      "position": [
+        1040,
+        464
+      ],
+      "typeVersion": 1.1
+    },
+    {
+      "parameters": {
+        "content": "# Website RAG Customer Support Chatbot\n\nThis workflow contains two connected processes:\n\n## 1. Knowledge-base ingestion\nThe manual workflow maps a website with Firecrawl, removes unwanted and duplicate URLs, processes pages one at a time, extracts readable text, discards empty pages, splits useful content into overlapping chunks, creates Gemini embeddings, and stores the vectors in Pinecone.\n\n## 2. Customer-support chat\nThe chat trigger sends each message to a Gemini-powered AI agent. The agent searches the Pinecone knowledge base before answering questions about services, pricing, policies, FAQs, contact details, or other website content. Window memory preserves short conversational context.\n\n## Required setup\n- Replace `https://example.com/` with the website to index.\n- Connect Firecrawl, Pinecone, and Google Gemini credentials.\n- Replace `YOUR_PINECONE_INDEX` and `YOUR_PINECONE_NAMESPACE` everywhere.\n- Use the same Gemini embedding model for ingestion and retrieval.\n- Ensure the Pinecone index dimension matches the selected embedding model.\n\nRun the ingestion branch whenever the website content changes. Test the chat branch only after indexing completes successfully.",
+        "height": 1104,
+        "width": 592,
+        "color": 6
+      },
+      "id": "cd4fca63-1379-4ccd-ad9b-eeea9f7d2e10",
+      "name": "Sticky Note - Overview",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -2704,
+        80
+      ],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "content": "## 1. Discover website pages\n\nFirecrawl maps the configured website and returns up to 100 page URLs. Replace `https://example.com/` with your own root domain and connect a Firecrawl credential before running the workflow.\n\nReview the returned URLs during your first test to confirm the crawl scope is appropriate.",
+        "height": 608,
+        "color": 5
+      },
+      "id": "43b535dd-391b-40c7-a163-a88f272864c8",
+      "name": "Sticky Note - URL Discovery",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -1440,
+        -176
+      ],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "content": "## 2. Filter and process URLs safely\n\nThe code node removes duplicates, trailing slashes, XML files, and paths containing configured blocked keywords. The loop processes one URL at a time, while the delay node adds a two-second pause between requests.\n\nCustomize `blockedKeywords`, the Firecrawl result limit, and the delay for your website and crawl policy.",
+        "height": 384,
+        "width": 560,
+        "color": 5
+      },
+      "id": "5d609d75-cf29-45a3-b80e-9be693677be5",
+      "name": "Sticky Note - URL Filtering and Pacing",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -1120,
+        48
+      ],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "content": "## 3. Fetch and clean page content\n\nEach URL is fetched with an HTTP Request node. The Set node keeps the page HTML and source URL, then the code node removes scripts, styles, tags, and excess whitespace to produce clean text for indexing.\n\nPages with fewer than 50 useful characters are skipped.",
+        "height": 352,
+        "width": 672,
+        "color": 5
+      },
+      "id": "16c9cac5-f9de-493e-ba10-c33575899dc5",
+      "name": "Sticky Note - Page Extraction",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -432,
+        0
+      ],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "public": true,
+        "mode": "webhook",
+        "availableInChat": true,
+        "options": {
+          "allowedOrigins": "*",
+          "responseMode": "lastNode"
+        }
+      },
+      "id": "f7f05924-3276-40c7-a4c8-d9c1961d3b30",
+      "name": "When chat message received",
+      "type": "@n8n/n8n-nodes-langchain.chatTrigger",
+      "position": [
+        -1600,
+        816
+      ],
+      "typeVersion": 1.1,
+      "webhookId": "3ef26bea-cc37-420a-b5f0-ed7eb1545f77"
+    },
+    {
+      "parameters": {
+        "contextWindowLength": 10
+      },
+      "id": "f2f965de-b428-4ac4-933f-e4852393c292",
+      "name": "Chat Memory",
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "position": [
+        -1248,
+        1040
+      ],
+      "typeVersion": 1.3
+    },
+    {
+      "parameters": {
+        "options": {
+          "systemMessage": "=You are **Alicia**, an AI customer support assistant for our company.\n\nToday's date is {{ $now.format('yyyy-MM-dd') }}. Use this date as the only reference for relative time.\n\nPRIMARY RULE\nAll business info (products, services, company info, website content, policies/FAQs, pricing, contact details) MUST come from tools — never from memory or assumptions.\n\nPINECONE USAGE\nUse the vector store tool for: products/services, offerings, policies, pricing, FAQs, company/site info.\nDo NOT use it for: greetings, small talk, personal details, scheduling.\nIf it returns nothing useful, reply exactly: \"I could not find that information. Would you like me to create a support ticket for you?\"\n\nMEMORY USAGE\nOnly store name/email/phone, and only after a confirmed booking. Never store product/company info in memory.\n\nGREETING RULE\nIf the user only says hi/hello/hey, reply exactly: \"Hi, how can I help you today?\" — no tools, no extra text.\n\nRESPONSE RULES\nBe friendly, concise, conversational. Never mention internal tools or reasoning. Never say \"as an AI\".\n\nLINK RULE\nLinks only from tool output, formatted as [text](url) — never raw URLs.\n\nFAILURE RULE\nAny tool failure → reply exactly: \"I could not find that information. Would you like me to create a support ticket for you?\"",
+          "maxIterations": 10,
+          "returnIntermediateSteps": false
+        }
+      },
+      "id": "4340a55e-d51b-46c9-9ec6-b2bc0ce315b7",
+      "name": "Customer Support Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "position": [
+        -1344,
+        816
+      ],
+      "typeVersion": 3
+    },
+    {
+      "parameters": {
+        "mode": "retrieve-as-tool",
+        "toolDescription": "=Use this tool whenever the user asks anything about our services, company info, website content, product/service details, policies, FAQs, contact information, pricing, or anything requiring knowledge from the company knowledge base.",
+        "pineconeIndex": {
+          "__rl": true,
+          "value": "YOUR_PINECONE_INDEX",
+          "mode": "id"
+        },
+        "topK": 10,
+        "options": {
+          "pineconeNamespace": "YOUR_PINECONE_NAMESPACE"
+        }
+      },
+      "id": "73e4a368-2789-4a1a-a24a-327184798c91",
+      "name": "Pinecone Vector Storage",
+      "type": "@n8n/n8n-nodes-langchain.vectorStorePinecone",
+      "position": [
+        -1120,
+        1040
+      ],
+      "typeVersion": 1.3,
+      "credentials": {
+        "pineconeApi": {
+          "id": "He7x7l2dSDnNI6LT",
+          "name": "Pinecone account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## 4. Chunk, embed, and index\n\nValid page text is split into approximately 1,000-character chunks with a 200-character overlap. The document loader preserves metadata, Google Gemini creates embeddings, and Pinecone stores the resulting vectors in `YOUR_PINECONE_NAMESPACE`.\n\nIngestion and retrieval must use the same embedding model. Create a standard dense Pinecone index whose dimension matches that model.",
+        "height": 784,
+        "width": 688,
+        "color": 4
+      },
+      "id": "968dc2c5-8e78-419b-b378-5cb84ffba331",
+      "name": "Sticky Note - Chunking and Indexing",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        480,
+        -80
+      ],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1.1,
+      "position": [
+        -1488,
+        1024
+      ],
+      "id": "0981b565-8e3f-4dfc-8cda-ef0aa1bd2cc9",
+      "name": "Google Gemini Chat Model",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "bEaT5iT50sW8AsJY",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "https://api.pinecone.io/indexes/YOUR_PINECONE_INDEX",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "pineconeApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Pinecone-Api-Version",
+              "value": "2025-04"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "6ef807bf-6706-4a9e-818e-df9921b5681f",
+      "name": "Get Pinecone Index Host",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        -1904,
+        464
+      ],
+      "typeVersion": 4.2
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'https://' + $json.host + '/vectors/delete' }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "pineconeApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ deleteAll: true, namespace: \"YOUR_PINECONE_NAMESPACE\" }) }}",
+        "options": {}
+      },
+      "id": "60d5dbe5-ce28-47eb-b9ec-93f9b515e12e",
+      "name": "Clear Pinecone Namespace (Prevent Duplicates)",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        -1648,
+        464
+      ],
+      "typeVersion": 4.2,
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "content": "## Important: namespace reset\n\nBefore every ingestion run, these nodes resolve the Pinecone index host and delete every existing vector from `YOUR_PINECONE_NAMESPACE`. The workflow then rebuilds the namespace from the current website content, preventing duplicate chunks across repeated runs.\n\nThis deletion is destructive. Use a dedicated namespace, replace `YOUR_PINECONE_INDEX` and `YOUR_PINECONE_NAMESPACE`, and never point this step at vectors you need to preserve.",
+        "height": 288,
+        "width": 460,
+        "color": 3
+      },
+      "id": "445bbb5e-440a-4725-bc10-d2b33ddc8480",
+      "name": "Sticky Note - Namespace Reset",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -2640,
+        848
+      ],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {},
+      "type": "@n8n/n8n-nodes-langchain.embeddingsGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        864,
+        448
+      ],
+      "id": "da2b9556-c29a-46fc-b511-60c2d1672541",
+      "name": "Embeddings Google Gemini",
+      "retryOnFail": true,
+      "credentials": {
+        "googlePalmApi": {
+          "id": "bEaT5iT50sW8AsJY",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## 5. Answer questions from the knowledge base\n\nThe chat trigger passes the user message to the Customer Support Agent. Gemini interprets the request, Pinecone retrieves the most relevant indexed chunks, and the agent answers using only retrieved website information. Window memory keeps recent conversational context.\n\nCustomize the agent name, greeting, fallback response, retrieval `topK`, and system instructions for your brand. Publish the chat trigger only after ingestion has completed and retrieval has been tested.",
+        "height": 576,
+        "width": 1184,
+        "color": 4
+      },
+      "id": "7c21d581-6dd5-4490-9ec2-a897cdecb168",
+      "name": "Sticky Note - Customer Support Chat",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -1824,
+        624
+      ],
+      "typeVersion": 1
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "When clicking 'Execute workflow'": {
+      "main": [
+        [
+          {
+            "node": "Get Pinecone Index Host",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Map Website URLs": {
+      "main": [
+        [
+          {
+            "node": "Filter and Normalize URLs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter and Normalize URLs": {
+      "main": [
+        [
+          {
+            "node": "Process URLs One by One",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process URLs One by One": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Rate Limit Delay",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rate Limit Delay": {
+      "main": [
+        [
+          {
+            "node": "Fetch Page Content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Page Content": {
+      "main": [
+        [
+          {
+            "node": "Extract HTML and URL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract HTML and URL": {
+      "main": [
+        [
+          {
+            "node": "Clean HTML to Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clean HTML to Text": {
+      "main": [
+        [
+          {
+            "node": "Check Text Length",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Text Length": {
+      "main": [
+        [
+          {
+            "node": "Split Text into Chunks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Text into Chunks": {
+      "main": [
+        [
+          {
+            "node": "Store in Vector Database",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store in Vector Database": {
+      "main": [
+        [
+          {
+            "node": "Process URLs One by One",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Document Loader": {
+      "ai_document": [
+        [
+          {
+            "node": "Store in Vector Database",
+            "type": "ai_document",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "When chat message received": {
+      "main": [
+        [
+          {
+            "node": "Customer Support Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Chat Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "Customer Support Agent",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pinecone Vector Storage": {
+      "ai_tool": [
+        [
+          {
+            "node": "Customer Support Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Gemini Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Customer Support Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Pinecone Index Host": {
+      "main": [
+        [
+          {
+            "node": "Clear Pinecone Namespace (Prevent Duplicates)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clear Pinecone Namespace (Prevent Duplicates)": {
+      "main": [
+        [
+          {
+            "node": "Map Website URLs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Embeddings Google Gemini": {
+      "ai_embedding": [
+        [
+          {
+            "node": "Store in Vector Database",
+            "type": "ai_embedding",
+            "index": 0
+          },
+          {
+            "node": "Pinecone Vector Storage",
+            "type": "ai_embedding",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": true
+  },
+  "versionId": "0e8ecb95-747d-4452-88df-6a966ea822a0",
+  "meta": {
+    "instanceId": "453e5935772e7db67484aa1235c207eab71eb591c44520f33d49de34bc305077"
+  },
+  "nodeGroups": [],
+  "id": "VbvHDHok4yFHAQEj",
+  "tags": []
+}

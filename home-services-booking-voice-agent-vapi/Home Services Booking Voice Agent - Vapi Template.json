@@ -1,0 +1,1811 @@
+{
+  "name": "Home Services Booking Voice Agent - Vapi (Template)",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "# book_service\n\nCreates a caller-confirmed booking, generates a short booking ID, saves it to the Bookings sheet, responds to Vapi, and emails staff.",
+        "height": 120,
+        "width": 620,
+        "color": 6
+      },
+      "id": "3289d0e9-675f-4a7c-9ace-0ca89abc6ff3",
+      "name": "Sticky Note - Book Service",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -4048,
+        -688
+      ],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "home_services_book_service",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "42bebe56-dbad-4c48-8b8c-064b670fe569",
+      "name": "Book Service Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "position": [
+        -4080,
+        -384
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "appt-id",
+              "name": "booking_id",
+              "type": "string",
+              "value": "=={{ 'FX-' + Math.floor(1000 + Math.random() * 9000) }}"
+            },
+            {
+              "id": "customer-name",
+              "name": "customer_name",
+              "type": "string",
+              "value": "={{ $json.body.customer_name }}"
+            },
+            {
+              "id": "customer-phone",
+              "name": "phone_number",
+              "type": "string",
+              "value": "={{ $json.body.phone_number }}"
+            },
+            {
+              "id": "service-address",
+              "name": "service_address",
+              "type": "string",
+              "value": "={{ $json.body.service_address }}"
+            },
+            {
+              "id": "service_category",
+              "name": "service_category",
+              "type": "string",
+              "value": "={{ $json.body.service_category }}"
+            },
+            {
+              "id": "technician-name",
+              "name": "technician_name",
+              "type": "string",
+              "value": "={{ $json.body.technician_name || 'Any available technician' }}"
+            },
+            {
+              "id": "booking-type",
+              "name": "booking_type",
+              "type": "string",
+              "value": "={{ $json.body.booking_type || 'standard_service' }}"
+            },
+            {
+              "id": "booking-date",
+              "name": "booking_date",
+              "type": "string",
+              "value": "={{ $json.body.date }}"
+            },
+            {
+              "id": "booking-time",
+              "name": "booking_time",
+              "type": "string",
+              "value": "={{ $json.body.time }}"
+            },
+            {
+              "id": "visit-reason",
+              "name": "issue_description",
+              "type": "string",
+              "value": "={{ $json.body.issue_description || 'Not provided' }}"
+            },
+            {
+              "id": "booking-status",
+              "name": "status",
+              "type": "string",
+              "value": "confirmed"
+            },
+            {
+              "id": "conversation-id",
+              "name": "conversation_id",
+              "type": "string",
+              "value": "={{ $json.body.conversation_id || $json.body.call_id || \"unknown\" }}"
+            },
+            {
+              "id": "created-at",
+              "name": "created_at",
+              "type": "string",
+              "value": "={{ $now.toISO() }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "f1c7bc09-45a2-44b7-b940-624ea4908cb8",
+      "name": "Normalize Booking Data",
+      "type": "n8n-nodes-base.set",
+      "position": [
+        -3632,
+        -384
+      ],
+      "typeVersion": 3.4
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "",
+          "mode": "list"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Bookings",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "booking_id": "={{ $json.booking_id }}",
+            "customer_name": "={{ $json.customer_name }}",
+            "phone_number": "={{ $json.phone_number }}",
+            "service_address": "={{ $json.service_address }}",
+            "service_category": "={{ $json.service_category }}",
+            "technician_name": "={{ $json.technician_name }}",
+            "booking_type": "={{ $json.booking_type }}",
+            "booking_date": "={{ $json.booking_date }}",
+            "booking_time": "={{ $json.booking_time }}",
+            "issue_description": "={{ $json.issue_description }}",
+            "status": "={{ $json.status }}",
+            "conversation_id": "={{ $json.conversation_id }}",
+            "created_at": "={{ $json.created_at }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "booking_id",
+              "displayName": "booking_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "customer_name",
+              "displayName": "customer_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "phone_number",
+              "displayName": "phone_number",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "service_address",
+              "displayName": "service_address",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "service_category",
+              "displayName": "service_category",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "technician_name",
+              "displayName": "technician_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "booking_type",
+              "displayName": "booking_type",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "booking_date",
+              "displayName": "booking_date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "booking_time",
+              "displayName": "booking_time",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "issue_description",
+              "displayName": "issue_description",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "conversation_id",
+              "displayName": "conversation_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "created_at",
+              "displayName": "created_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "id": "674fe23b-91af-4d4d-ae53-dd3990da9eeb",
+      "name": "Log Booking to Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "position": [
+        -3408,
+        -384
+      ],
+      "typeVersion": 4.5
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "booking-message",
+              "name": "message",
+              "type": "string",
+              "value": "=Booking {{ $json.booking_id }} is confirmed for {{ $json.customer_name }} for {{ $json.service_category }} at {{ $json.service_address }} on {{ $json.booking_date }} at {{ $json.booking_time }}. Assigned technician: {{ $json.technician_name }}."
+            },
+            {
+              "id": "booking-status",
+              "name": "status",
+              "type": "string",
+              "value": "confirmed"
+            },
+            {
+              "id": "booking-id",
+              "name": "booking_id",
+              "type": "string",
+              "value": "={{ $json.booking_id }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "1079c148-5a39-4a18-9cea-eacdbd632d72",
+      "name": "Build Booking Confirmation",
+      "type": "n8n-nodes-base.set",
+      "position": [
+        -3184,
+        -480
+      ],
+      "typeVersion": 3.4
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"success\": true, \"status\": $json.status, \"booking_id\": $json.booking_id, \"message\": $json.message } }}",
+        "options": {}
+      },
+      "id": "b57211e9-fa46-4184-aca2-00777bae33f4",
+      "name": "Respond to Vapi - Booking",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "position": [
+        -2960,
+        -480
+      ],
+      "typeVersion": 1.1
+    },
+    {
+      "parameters": {
+        "content": "# check_booking_availability\n\nChecks existing bookings for the requested service category, date, time, and optional technician preference.",
+        "height": 120,
+        "width": 620,
+        "color": 6
+      },
+      "id": "ea74a98b-f91a-4e8b-be80-70e33f2112c4",
+      "name": "Sticky Note - Check Booking Availability",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -4064,
+        -16
+      ],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "home_services_check_availability",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "cc6d212d-5cac-4862-bdc7-69a056dae7cc",
+      "name": "Booking Availability Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "position": [
+        -4032,
+        144
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "",
+          "mode": "list"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Bookings",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "5a05ddca-8821-46d5-a6d1-2675add0b7e9",
+      "name": "Read Bookings",
+      "type": "n8n-nodes-base.googleSheets",
+      "position": [
+        -3792,
+        144
+      ],
+      "typeVersion": 4.5,
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $('Booking Availability Webhook').first().json.body ?? {};\n\nfunction normalizeDate(value) {\n  const text = String(value ?? '').trim();\n  let match = text.match(/^(\\d{4})-(\\d{1,2})-(\\d{1,2})$/);\n  if (match) return `${match[1]}-${match[2].padStart(2, '0')}-${match[3].padStart(2, '0')}`;\n  match = text.match(/^(\\d{1,2})\\/(\\d{1,2})\\/(\\d{4})$/);\n  if (match) return `${match[3]}-${match[1].padStart(2, '0')}-${match[2].padStart(2, '0')}`;\n  return text;\n}\n\nfunction normalizeTime(value) {\n  const text = String(value ?? '').trim().toUpperCase();\n  const match = text.match(/^(\\d{1,2})(?::(\\d{2}))?\\s*(AM|PM)?$/);\n  if (!match) return text;\n  let hour = Number(match[1]);\n  const minute = Number(match[2] ?? 0);\n  if (match[3] === 'AM' && hour === 12) hour = 0;\n  if (match[3] === 'PM' && hour !== 12) hour += 12;\n  return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;\n}\n\nconst technicianName = String(body.technician_name ?? '').trim();\nconst serviceCategory = String(body.service_category ?? '').trim();\nconst requestedDate = normalizeDate(body.date);\nconst requestedTime = normalizeTime(body.time);\n\nif (!serviceCategory || !requestedDate || !requestedTime) {\n  throw new Error('service_category, date, and time are required.');\n}\n\nconst rows = $input.all().map((item) => item.json);\nconst conflict = rows.some((row) => {\n  const sameCategory = String(row.service_category ?? '').trim().toLowerCase() === serviceCategory.toLowerCase();\n  const sameTechnician = !technicianName || String(row.technician_name ?? '').trim().toLowerCase() === technicianName.toLowerCase();\n  return sameCategory && sameTechnician &&\n    normalizeDate(row.booking_date) === requestedDate &&\n    normalizeTime(row.booking_time) === requestedTime &&\n    String(row.status ?? 'confirmed').trim().toLowerCase() !== 'cancelled';\n});\n\nreturn [{ json: {\n  available: !conflict,\n  technician_name: technicianName || 'Any available technician',\n  service_category: serviceCategory,\n  date: requestedDate,\n  time: requestedTime,\n} }];"
+      },
+      "id": "25e6f1f4-ddcc-4a16-8b66-7d36a4f18cea",
+      "name": "Check Technician Slot",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        -3552,
+        144
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "cond-avail-1",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              },
+              "leftValue": "={{ $json.available }}",
+              "rightValue": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "3da0c808-c930-4fba-bc93-aaf80d284ced",
+      "name": "Booking Slot Available",
+      "type": "n8n-nodes-base.if",
+      "position": [
+        -3312,
+        144
+      ],
+      "typeVersion": 2.2
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "available-message",
+              "name": "message",
+              "type": "string",
+              "value": "=Yes, {{ $json.service_category }} service is available on {{ $json.date }} at {{ $json.time }}. Technician preference: {{ $json.technician_name }}."
+            },
+            {
+              "id": "available-status",
+              "name": "available",
+              "type": "boolean",
+              "value": "={{ true }}"
+            },
+            {
+              "id": "available-technician",
+              "name": "technician_name",
+              "type": "string",
+              "value": "={{ $json.technician_name }}"
+            },
+            {
+              "id": "available-dept",
+              "name": "service_category",
+              "type": "string",
+              "value": "={{ $json.service_category }}"
+            },
+            {
+              "id": "available-date",
+              "name": "date",
+              "type": "string",
+              "value": "={{ $json.date }}"
+            },
+            {
+              "id": "available-time",
+              "name": "time",
+              "type": "string",
+              "value": "={{ $json.time }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "6db73a7c-7e6e-4ac3-a9fb-41b408f7b375",
+      "name": "Message - Available",
+      "type": "n8n-nodes-base.set",
+      "position": [
+        -3072,
+        48
+      ],
+      "typeVersion": 3.4
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "unavailable-message",
+              "name": "message",
+              "type": "string",
+              "value": "=I’m sorry, {{ $json.service_category }} service is not available on {{ $json.date }} at {{ $json.time }}. Please ask for another time."
+            },
+            {
+              "id": "unavailable-status",
+              "name": "available",
+              "type": "boolean",
+              "value": "={{ false }}"
+            },
+            {
+              "id": "unavailable-technician",
+              "name": "technician_name",
+              "type": "string",
+              "value": "={{ $json.technician_name }}"
+            },
+            {
+              "id": "unavailable-dept",
+              "name": "service_category",
+              "type": "string",
+              "value": "={{ $json.service_category }}"
+            },
+            {
+              "id": "unavailable-date",
+              "name": "date",
+              "type": "string",
+              "value": "={{ $json.date }}"
+            },
+            {
+              "id": "unavailable-time",
+              "name": "time",
+              "type": "string",
+              "value": "={{ $json.time }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "666a321a-4a63-4857-8ca2-bc3b8fd013f4",
+      "name": "Message - Not Available",
+      "type": "n8n-nodes-base.set",
+      "position": [
+        -3072,
+        256
+      ],
+      "typeVersion": 3.4
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"success\": true, \"available\": $json.available, \"technician_name\": $json.technician_name, \"service_category\": $json.service_category, \"date\": $json.date, \"time\": $json.time, \"message\": $json.message } }}",
+        "options": {}
+      },
+      "id": "ef47486d-1ac5-4972-aedc-fb5638c5d781",
+      "name": "Respond to Vapi - Availability",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "position": [
+        -2832,
+        144
+      ],
+      "typeVersion": 1.1
+    },
+    {
+      "parameters": {
+        "content": "# manage_booking\n\nFinds a booking using its booking ID and customer phone number, then cancels or reschedules it after caller confirmation.",
+        "height": 120,
+        "width": 660,
+        "color": 6
+      },
+      "id": "de840679-4dcb-42a2-ab16-20bd3186f8e7",
+      "name": "Sticky Note - Manage Booking",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -2432,
+        -448
+      ],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "home_services_manage_booking",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "f4b01116-03e4-424a-a22e-309caecf286e",
+      "name": "Manage Booking Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "position": [
+        -2432,
+        -272
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "",
+          "mode": "list"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Bookings",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "72cfd484-44a0-4f30-89fa-5fb1e3957434",
+      "name": "Read Bookings for Lookup",
+      "type": "n8n-nodes-base.googleSheets",
+      "position": [
+        -1984,
+        -272
+      ],
+      "typeVersion": 4.5,
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $('Manage Booking Webhook').first().json.body ?? {};\n\nfunction normalizePhone(value) {\n  const digits = String(value ?? '').replace(/\\D/g, '');\n  return digits.length > 10 ? digits.slice(-10) : digits;\n}\n\nconst bookingId = String(body.booking_id ?? '').trim().toUpperCase();\nconst phone = normalizePhone(body.phone_number);\n\nif (!bookingId || !phone) {\n  return [{ json: { found: false, error: 'booking_id or phone_number is missing' } }];\n}\n\nconst match = $input.all().find(({ json }) =>\n  String(json.booking_id ?? '').trim().toUpperCase() === bookingId &&\n  normalizePhone(json.phone_number) === phone &&\n  String(json.status ?? '').trim().toLowerCase() !== 'cancelled'\n);\n\nif (!match) return [{ json: { found: false } }];\nreturn [{ json: { ...match.json, found: true, row_number: match.json.row_number } }];"
+      },
+      "id": "100c5c49-7d18-483f-9ee6-873e1949ffa3",
+      "name": "Find Matching Booking",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        -1760,
+        -272
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "cond-found",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              },
+              "leftValue": "={{ $json.found }}",
+              "rightValue": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "52ab9094-48f0-41ca-9e5e-0c7d776c889e",
+      "name": "Booking Found",
+      "type": "n8n-nodes-base.if",
+      "position": [
+        -1536,
+        -272
+      ],
+      "typeVersion": 2.2
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 1
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "cond-action-cancel",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              },
+              "leftValue": "={{ $('Manage Booking Webhook').first().json.body.action }}",
+              "rightValue": "cancel"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "f47ad6f3-cbb3-4b77-bf5d-f172db66933c",
+      "name": "Is Cancel Action",
+      "type": "n8n-nodes-base.if",
+      "position": [
+        -1312,
+        -368
+      ],
+      "typeVersion": 2.2
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "",
+          "mode": "list"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Bookings",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "booking_id": "={{ $json.booking_id }}",
+            "status": "cancelled"
+          },
+          "matchingColumns": [
+            "booking_id"
+          ],
+          "schema": [
+            {
+              "id": "booking_id",
+              "displayName": "booking_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "customer_name",
+              "displayName": "customer_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "phone_number",
+              "displayName": "phone_number",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "service_category",
+              "displayName": "service_category",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "technician_name",
+              "displayName": "technician_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "booking_type",
+              "displayName": "booking_type",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "booking_date",
+              "displayName": "booking_date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "booking_time",
+              "displayName": "booking_time",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "issue_description",
+              "displayName": "issue_description",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "conversation_id",
+              "displayName": "conversation_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "created_at",
+              "displayName": "created_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "row_number",
+              "displayName": "row_number",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true,
+              "readOnly": true,
+              "removed": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "5bfcfb11-d702-42dd-9a02-62ca674ae82e",
+      "name": "Mark Booking Cancelled",
+      "type": "n8n-nodes-base.googleSheets",
+      "position": [
+        -864,
+        -464
+      ],
+      "typeVersion": 4.5
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "",
+          "mode": "list"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Bookings",
+          "mode": "name"
+        },
+        "columns": {
+          "value": {
+            "booking_date": "={{ $json.booking_date }}",
+            "booking_time": "={{ $json.booking_time }}",
+            "technician_name": "={{ $json.technician_name }}",
+            "service_category": "={{ $json.service_category }}",
+            "status": "={{ $json.status }}",
+            "row_number": "={{ $json.row_number }}",
+            "service_address": "={{ $json.service_address }}"
+          },
+          "schema": [
+            {
+              "id": "booking_date",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "booking_date",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "booking_time",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "booking_time",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "technician_name",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "technician_name",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "service_category",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "service_category",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "service_address",
+              "displayName": "service_address",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "status",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "status",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "row_number",
+              "type": "number",
+              "display": true,
+              "removed": false,
+              "readOnly": true,
+              "required": false,
+              "displayName": "row_number",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            }
+          ],
+          "mappingMode": "defineBelow",
+          "matchingColumns": [
+            "row_number"
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "8055bfbd-23d7-4ded-89a5-890e8edd0c25",
+      "name": "Update Booking Details",
+      "type": "n8n-nodes-base.googleSheets",
+      "position": [
+        -864,
+        -272
+      ],
+      "typeVersion": 4.5
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "not-found-message",
+              "name": "message",
+              "type": "string",
+              "value": "=I could not find an active booking matching that booking ID and phone number."
+            },
+            {
+              "id": "not-found-status",
+              "name": "status",
+              "type": "string",
+              "value": "not_found"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "3871f65e-1c33-40d8-86ed-136a39e61f55",
+      "name": "Message - Not Found",
+      "type": "n8n-nodes-base.set",
+      "position": [
+        -640,
+        -80
+      ],
+      "typeVersion": 3.4
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "cancelled-message",
+              "name": "message",
+              "type": "string",
+              "value": "=Booking {{ $('Find Matching Booking').first().json.booking_id }} on {{ $('Find Matching Booking').first().json.booking_date }} at {{ $('Find Matching Booking').first().json.booking_time }} has been cancelled."
+            },
+            {
+              "id": "cancelled-status",
+              "name": "status",
+              "type": "string",
+              "value": "cancelled"
+            },
+            {
+              "id": "cancelled-id",
+              "name": "booking_id",
+              "type": "string",
+              "value": "={{ $('Find Matching Booking').first().json.booking_id }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a0257668-dc1e-4cb3-a56c-c8ef58912a59",
+      "name": "Message - Cancelled",
+      "type": "n8n-nodes-base.set",
+      "position": [
+        -640,
+        -464
+      ],
+      "typeVersion": 3.4
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "rescheduled-message",
+              "name": "message",
+              "type": "string",
+              "value": "=Booking {{ $json.booking_id || \"\" }} has been rescheduled successfully."
+            },
+            {
+              "id": "rescheduled-status",
+              "name": "status",
+              "type": "string",
+              "value": "rescheduled"
+            },
+            {
+              "id": "rescheduled-id",
+              "name": "booking_id",
+              "type": "string",
+              "value": "={{ $('Find Matching Booking').first().json.booking_id }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "582dc6b8-62c7-4824-be3e-d48b00cc4057",
+      "name": "Message - Modified",
+      "type": "n8n-nodes-base.set",
+      "position": [
+        -640,
+        -272
+      ],
+      "typeVersion": 3.4
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"success\": $json.status !== \"not_found\", \"status\": $json.status, \"booking_id\": $json.booking_id || null, \"message\": $json.message } }}",
+        "options": {}
+      },
+      "id": "fb2ceb6b-cb70-4a89-985b-f017ae1b7893",
+      "name": "Respond to Vapi - Manage",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "position": [
+        -416,
+        -272
+      ],
+      "typeVersion": 1.1
+    },
+    {
+      "parameters": {
+        "sendTo": "",
+        "subject": "=New service booking: {{ $json.customer_name }} - {{ $json.booking_date }} {{ $json.booking_time }}",
+        "message": "=New booking received through the Vapi home-services voice assistant.<br><br><strong>Booking ID:</strong> {{ $json.booking_id }}<br><strong>Customer:</strong> {{ $json.customer_name }}<br><strong>Phone:</strong> {{ $json.phone_number }}<br><strong>Address:</strong> {{ $json.service_address }}<br><strong>Service category:</strong> {{ $json.service_category }}<br><strong>Technician:</strong> {{ $json.technician_name }}<br><strong>Date:</strong> {{ $json.booking_date }}<br><strong>Time:</strong> {{ $json.booking_time }}<br><strong>Booking type:</strong> {{ $json.booking_type }}<br><strong>Issue description:</strong> {{ $json.issue_description }}",
+        "options": {}
+      },
+      "id": "99ea053b-0427-4f70-85ce-b8020c5b9d64",
+      "name": "Send Staff New Booking Email",
+      "type": "n8n-nodes-base.gmail",
+      "position": [
+        -3184,
+        -288
+      ],
+      "typeVersion": 2.1
+    },
+    {
+      "parameters": {
+        "sendTo": "",
+        "subject": "=Booking cancelled: {{ $('Find Matching Booking').first().json.booking_id }}",
+        "message": "=Booking {{ $('Find Matching Booking').first().json.booking_id }} for {{ $('Find Matching Booking').first().json.customer_name }} has been cancelled.",
+        "options": {}
+      },
+      "id": "e0699085-51a8-4a18-abcd-92be495f4f84",
+      "name": "Send Staff Cancellation Email",
+      "type": "n8n-nodes-base.gmail",
+      "position": [
+        -640,
+        -656
+      ],
+      "typeVersion": 2.1
+    },
+    {
+      "parameters": {
+        "sendTo": "",
+        "subject": "=Booking rescheduled: {{ $('Find Matching Booking').first().json.booking_id }}",
+        "message": "=Booking {{ $('Find Matching Booking').first().json.booking_id }} for {{ $('Find Matching Booking').first().json.customer_name }} was rescheduled to {{ $json.booking_date }} at {{ $json.booking_time }} for {{ $json.service_category }} at {{ $json.service_address }}. Technician: {{ $json.technician_name }}.",
+        "options": {}
+      },
+      "id": "521c76d7-4b13-47b9-be8d-4021419c1796",
+      "name": "Send Staff Reschedule Email",
+      "type": "n8n-nodes-base.gmail",
+      "position": [
+        -832,
+        208
+      ],
+      "typeVersion": 2.1
+    },
+    {
+      "parameters": {
+        "content": "# request_human_callback\n\nStores a callback request in the Callbacks sheet and emails staff. This does not initiate a live call transfer.",
+        "height": 120,
+        "width": 660,
+        "color": 6
+      },
+      "id": "aa55d833-5542-443c-9268-4a5b5257eeee",
+      "name": "Sticky Note - Staff Callback",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -2352,
+        304
+      ],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "home_services_request_callback",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "230c6ecd-ae32-44b8-a709-7d45f81c5523",
+      "name": "Callback Request Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "position": [
+        -2352,
+        480
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "callback-name",
+              "name": "customer_name",
+              "type": "string",
+              "value": "={{ $json.body.customer_name }}"
+            },
+            {
+              "id": "callback-phone",
+              "name": "phone_number",
+              "type": "string",
+              "value": "={{ $json.body.phone_number }}"
+            },
+            {
+              "id": "callback-reason",
+              "name": "reason",
+              "type": "string",
+              "value": "={{ $json.body.reason }}"
+            },
+            {
+              "id": "callback-call-id",
+              "name": "conversation_id",
+              "type": "string",
+              "value": "={{ $json.body.conversation_id || $json.body.call_id || \"unknown\" }}"
+            },
+            {
+              "id": "callback-created",
+              "name": "created_at",
+              "type": "string",
+              "value": "={{ $now.toISO() }}"
+            },
+            {
+              "id": "callback-status",
+              "name": "status",
+              "type": "string",
+              "value": "pending"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "9f856dcf-7a10-4e83-884e-bd987d2736b7",
+      "name": "Normalize Callback Data",
+      "type": "n8n-nodes-base.set",
+      "position": [
+        -2112,
+        480
+      ],
+      "typeVersion": 3.4
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "",
+          "mode": "list"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Callbacks",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "customer_name": "={{ $json.customer_name }}",
+            "phone_number": "={{ $json.phone_number }}",
+            "reason": "={{ $json.reason }}",
+            "conversation_id": "={{ $json.conversation_id }}",
+            "created_at": "={{ $json.created_at }}",
+            "status": "={{ $json.status }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "customer_name",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "customer_name",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "phone_number",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "phone_number",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "reason",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "reason",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "conversation_id",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "conversation_id",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "created_at",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "created_at",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "status",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "status",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "id": "c91af2ea-0017-48e6-aef5-a6bbd30d8529",
+      "name": "Log Callback to Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "position": [
+        -1872,
+        480
+      ],
+      "typeVersion": 4.5
+    },
+    {
+      "parameters": {
+        "sendTo": "",
+        "subject": "=Home-services callback requested: {{ $json.customer_name }}",
+        "message": "=Please call {{ $json.customer_name }} at {{ $json.phone_number }}.<br><strong>Issue description:</strong> {{ $json.reason }}<br><strong>Logged:</strong> {{ $json.created_at }}",
+        "options": {}
+      },
+      "id": "99909291-80ea-4a2e-8270-b275d9b289a4",
+      "name": "Send Staff Callback Email",
+      "type": "n8n-nodes-base.gmail",
+      "position": [
+        -1616,
+        640
+      ],
+      "typeVersion": 2.1
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "callback-message",
+              "name": "message",
+              "type": "string",
+              "value": "=Thank you, {{ $json.customer_name }}. A callback request has been sent to the home-services team for {{ $json.phone_number }}."
+            },
+            {
+              "id": "callback-response-status",
+              "name": "status",
+              "type": "string",
+              "value": "callback_requested"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "2d6705f7-1ce6-42ef-900b-18304d4d3e8f",
+      "name": "Build Callback Response",
+      "type": "n8n-nodes-base.set",
+      "position": [
+        -1392,
+        480
+      ],
+      "typeVersion": 3.4
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"success\": true, \"status\": $json.status, \"message\": $json.message } }}",
+        "options": {}
+      },
+      "id": "34ef99b2-cf0e-4f20-bdc2-26ef60906dc7",
+      "name": "Respond to Vapi - Callback",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "position": [
+        -1152,
+        480
+      ],
+      "typeVersion": 1.1
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $('Manage Booking Webhook').first().json.body ?? {};\nconst original = $input.first().json;\nconst hasValue = (value) => value !== undefined && value !== null && String(value).trim() !== '';\n\nreturn [{ json: {\n  row_number: original.row_number,\n  booking_date: hasValue(body.new_date) ? body.new_date : original.booking_date,\n  booking_time: hasValue(body.new_time) ? body.new_time : original.booking_time,\n  technician_name: hasValue(body.new_technician_name) ? body.new_technician_name : original.technician_name,\n  service_category: hasValue(body.new_service_category) ? body.new_service_category : original.service_category,\n  service_address: hasValue(body.new_service_address) ? body.new_service_address : original.service_address,\n  status: 'confirmed',\n} }];"
+      },
+      "id": "cf786649-9e9f-4f2c-afaf-a9d49ba5e4a7",
+      "name": "Merge Reschedule Fields",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        -1088,
+        -272
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "content": "# Home Services Voice Agent\n\nVapi + n8n workflow for checking availability, booking services, managing bookings, and requesting human callbacks.\n\nUses Google Sheets for storage and Gmail for staff notifications.\n\n## Setup after import\n\n1. Connect your own Google Sheets and Gmail credentials.\n2. Select your spreadsheet and verify the `Bookings` and `Callbacks` tabs.\n3. Enter the staff notification email in each Gmail node.\n4. Activate the workflow and add its production webhook URLs to Vapi.",
+        "height": 560,
+        "width": 720,
+        "color": 4
+      },
+      "id": "d2048381-4aca-44f4-b521-f10497bf20d1",
+      "name": "Sticky Note - System Overview",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -4928,
+        -672
+      ],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body ?? {};\nconst required = ['customer_name', 'phone_number', 'service_address', 'service_category', 'date', 'time'];\nconst missing = required.filter((field) => body[field] === undefined || body[field] === null || String(body[field]).trim() === '');\nif (missing.length) throw new Error(`Missing required booking fields: ${missing.join(', ')}`);\nif (body.caller_confirmed !== true) throw new Error('Booking requires explicit caller confirmation.');\nreturn $input.all();"
+      },
+      "id": "6f984e95-2b6e-426b-82e1-b5581ed9232b",
+      "name": "Validate Booking Request",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        -3856,
+        -384
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body ?? {};\nif (!['cancel', 'reschedule'].includes(String(body.action ?? '').toLowerCase())) throw new Error('action must be cancel or reschedule.');\nif (!body.booking_id || !body.phone_number) throw new Error('booking_id and phone_number are required.');\nif (body.caller_confirmed !== true) throw new Error('Booking changes require explicit caller confirmation.');\nif (String(body.action).toLowerCase() === 'reschedule' && (!body.new_date || !body.new_time)) throw new Error('new_date and new_time are required for rescheduling.');\nreturn $input.all();"
+      },
+      "id": "8d815eb6-c220-466b-a097-6bcf441dec03",
+      "name": "Validate Manage Request",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        -2208,
+        -272
+      ],
+      "typeVersion": 2
+    }
+  ],
+  "connections": {
+    "Normalize Booking Data": {
+      "main": [
+        [
+          {
+            "node": "Log Booking to Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Booking to Sheet": {
+      "main": [
+        [
+          {
+            "node": "Build Booking Confirmation",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Send Staff New Booking Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Booking Confirmation": {
+      "main": [
+        [
+          {
+            "node": "Respond to Vapi - Booking",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Booking Availability Webhook": {
+      "main": [
+        [
+          {
+            "node": "Read Bookings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Bookings": {
+      "main": [
+        [
+          {
+            "node": "Check Technician Slot",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Technician Slot": {
+      "main": [
+        [
+          {
+            "node": "Booking Slot Available",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Booking Slot Available": {
+      "main": [
+        [
+          {
+            "node": "Message - Available",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Message - Not Available",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Message - Available": {
+      "main": [
+        [
+          {
+            "node": "Respond to Vapi - Availability",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Message - Not Available": {
+      "main": [
+        [
+          {
+            "node": "Respond to Vapi - Availability",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manage Booking Webhook": {
+      "main": [
+        [
+          {
+            "node": "Validate Manage Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Bookings for Lookup": {
+      "main": [
+        [
+          {
+            "node": "Find Matching Booking",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Matching Booking": {
+      "main": [
+        [
+          {
+            "node": "Booking Found",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Booking Found": {
+      "main": [
+        [
+          {
+            "node": "Is Cancel Action",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Message - Not Found",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Cancel Action": {
+      "main": [
+        [
+          {
+            "node": "Mark Booking Cancelled",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Merge Reschedule Fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark Booking Cancelled": {
+      "main": [
+        [
+          {
+            "node": "Message - Cancelled",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Send Staff Cancellation Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Booking Details": {
+      "main": [
+        [
+          {
+            "node": "Message - Modified",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Send Staff Reschedule Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Message - Not Found": {
+      "main": [
+        [
+          {
+            "node": "Respond to Vapi - Manage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Message - Cancelled": {
+      "main": [
+        [
+          {
+            "node": "Respond to Vapi - Manage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Message - Modified": {
+      "main": [
+        [
+          {
+            "node": "Respond to Vapi - Manage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Callback Request Webhook": {
+      "main": [
+        [
+          {
+            "node": "Normalize Callback Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Callback Data": {
+      "main": [
+        [
+          {
+            "node": "Log Callback to Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Callback to Sheet": {
+      "main": [
+        [
+          {
+            "node": "Send Staff Callback Email",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Build Callback Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Callback Response": {
+      "main": [
+        [
+          {
+            "node": "Respond to Vapi - Callback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Reschedule Fields": {
+      "main": [
+        [
+          {
+            "node": "Update Booking Details",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Booking Request": {
+      "main": [
+        [
+          {
+            "node": "Normalize Booking Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Manage Request": {
+      "main": [
+        [
+          {
+            "node": "Read Bookings for Lookup",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Book Service Webhook": {
+      "main": [
+        [
+          {
+            "node": "Validate Booking Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "nodeGroups": [],
+  "tags": []
+}

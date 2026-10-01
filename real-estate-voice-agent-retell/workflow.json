@@ -1,0 +1,1509 @@
+{
+  "name": "Real Estate Voice Agent - Retell",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "# 🏡 Real Estate Voice Assistant (Retell + n8n)\n\nBackend for a Retell voice agent that handles real estate calls — checking listings, logging new listings, booking viewings, answering property questions, and escalating to a human.\n\n### How it works\n1. Retell calls one of 5 tool webhooks during the live call\n2. `check_property_availability` → searches Listings by location/type/bedrooms/budget\n3. `list_property` → saves a new listing as pending_review and emails the office for approval\n4. `book_property_visit` → checks the slot is free, logs the viewing, emails the agent\n5. `get_property_details` → reads Listings and reads back price, size, bedrooms, description\n6. `request_human_callback` → logs an escalation and alerts the office\n\n### Setup steps\n1. Add a **Google Sheets** credential and point every Sheets node at your own sheet (tabs: `Listings`, `Viewings`, `Escalations`)\n2. Add a **Gmail** credential and set the office/agent notification email on the 3 \"Send...\" nodes\n3. Activate the workflow, copy each webhook's Production URL into the matching Retell custom tool",
+        "height": 620,
+        "width": 620
+      },
+      "id": "8a147a9c-0908-47f9-9f59-ccff0b262a4e",
+      "name": "Sticky Note c4d2ff83",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1392,
+        352
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "check_property_availability",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "9903e0f9-1763-4d81-93ea-0da4a7dc66ac",
+      "name": "Check Availability Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        208,
+        496
+      ],
+      "webhookId": "60c1869c-4d76-48f8-9c16-8783f3248eba"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "crit-location",
+              "name": "location",
+              "type": "string",
+              "value": "={{ $json.body?.location ?? \"\" }}"
+            },
+            {
+              "id": "crit-type",
+              "name": "property_type",
+              "type": "string",
+              "value": "={{ $json.body?.property_type ?? \"\" }}"
+            },
+            {
+              "id": "crit-bedrooms",
+              "name": "bedrooms",
+              "type": "string",
+              "value": "={{ $json.body?.bedrooms ?? \"\" }}"
+            },
+            {
+              "id": "crit-maxprice",
+              "name": "max_price",
+              "type": "string",
+              "value": "={{ $json.body?.max_price ?? \"\" }}"
+            },
+            {
+              "id": "crit-listingtype",
+              "name": "listing_type",
+              "type": "string",
+              "value": "={{ $json.body?.listing_type ?? \"\" }}"
+            },
+            {
+              "id": "crit-convid",
+              "name": "conversation_id",
+              "type": "string",
+              "value": "={{ $json.body?.conversation_id ?? \"\" }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "5fcc9ee4-8431-405c-b86e-057077f33eb1",
+      "name": "Normalize Search Criteria",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        432,
+        496
+      ]
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Listings",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/YOUR_GOOGLE_SHEET_ID/edit#gid=0"
+        },
+        "options": {}
+      },
+      "id": "10ccf418-8459-4b19-a4e2-99ab67948739",
+      "name": "Read Listings (Search)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        656,
+        496
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const criteria = $('Normalize Search Criteria').first().json;\nconst rows = $input.all().map((item) => item.json);\n\nfunction norm(value) {\n  return String(value ?? '').trim().toLowerCase();\n}\n\nfunction normalizeListingType(value) {\n  const text = norm(value);\n  if (text === 'buy' || text === 'purchase') return 'sale';\n  if (text === 'lease' || text === 'renting') return 'rent';\n  return text;\n}\n\nfunction toValueList(value) {\n  return norm(value)\n    .split(/,| or | \\/ |\\//)\n    .map((part) => part.trim())\n    .filter((part) => part.length > 0);\n}\n\nconst wantedLocations = toValueList(criteria.location);\nconst wantedTypes = toValueList(criteria.property_type);\nconst wantedListingTypes = toValueList(criteria.listing_type).map(normalizeListingType);\nconst wantedBedrooms = Number.parseInt(criteria.bedrooms, 10);\nconst maxPrice = Number.parseFloat(criteria.max_price);\n\nconst matches = rows.filter((row) => {\n  const status = norm(row.status);\n  if (status === 'sold' || status === 'rented' || status === 'pending_review') {\n    return false;\n  }\n  const rowLocation = norm(row.location);\n  if (wantedLocations.length > 0 && !wantedLocations.some((loc) => rowLocation.includes(loc))) {\n    return false;\n  }\n  if (wantedTypes.length > 0 && !wantedTypes.includes(norm(row.property_type))) {\n    return false;\n  }\n  if (wantedListingTypes.length > 0 && !wantedListingTypes.includes(normalizeListingType(row.listing_type))) {\n    return false;\n  }\n  const rowBedrooms = Number.parseInt(row.bedrooms, 10);\n  if (Number.isInteger(wantedBedrooms) && Number.isInteger(rowBedrooms) && rowBedrooms < wantedBedrooms) {\n    return false;\n  }\n  const rowPrice = Number.parseFloat(row.price);\n  if (Number.isFinite(maxPrice) && Number.isFinite(rowPrice) && rowPrice > maxPrice) {\n    return false;\n  }\n  return true;\n});\n\nconst summaryLines = matches.slice(0, 5).map((row) => {\n  const bedroomsPart = Number.isInteger(Number.parseInt(row.bedrooms, 10))\n    ? row.bedrooms + '-bed '\n    : '';\n  return row.property_id + ': ' + bedroomsPart + row.property_type + ' in ' + row.location + ' for ' + row.price;\n});\n\nconst message = matches.length > 0\n  ? 'I found ' + matches.length + ' matching properties. ' + summaryLines.join('. ')\n  : 'I could not find any properties matching that right now. Would you like me to adjust the budget or location?';\n\nreturn [\n  {\n    json: {\n      match_count: matches.length,\n      matches: matches,\n      message: message\n    }\n  }\n];"
+      },
+      "id": "4f8967e5-b252-4b1c-bb07-18b576af199c",
+      "name": "Filter Matching Properties",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        496
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"match_count\": $json.match_count, \"matches\": $json.matches, \"message\": $json.message } }}",
+        "options": {}
+      },
+      "id": "6f6b0c5a-d29a-4bc9-8a24-cca4e4c8e756",
+      "name": "Respond Availability Search",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1104,
+        496
+      ]
+    },
+    {
+      "parameters": {
+        "content": "# check_property_availability\nReads Listings and returns properties matching location, type, bedrooms, budget and listing type (sale/rent).",
+        "width": 528,
+        "color": 7
+      },
+      "id": "ab8551f2-f5af-4fef-af48-2a89c4c1839e",
+      "name": "Sticky Note 0de6a5af",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -368,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "list_property",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "ee2a43a5-996a-4d88-8716-c71c414a68d6",
+      "name": "List Property Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        208,
+        912
+      ],
+      "webhookId": "cc9c470a-1ea8-44c2-9c7e-96c0937b5a1d"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "list-property-id",
+              "name": "property_id",
+              "value": "={{ \"P-\" + $now.toFormat(\"yyMMddHHmmss\") }}",
+              "type": "string"
+            },
+            {
+              "id": "list-owner",
+              "name": "owner_name",
+              "value": "={{ $json.body?.owner_name ?? \"\" }}",
+              "type": "string"
+            },
+            {
+              "id": "list-phone",
+              "name": "phone_number",
+              "value": "={{ $json.body?.phone_number ?? \"\" }}",
+              "type": "string"
+            },
+            {
+              "id": "list-type",
+              "name": "property_type",
+              "value": "={{ $json.body?.property_type ?? \"\" }}",
+              "type": "string"
+            },
+            {
+              "id": "list-location",
+              "name": "location",
+              "value": "={{ $json.body?.location ?? \"\" }}",
+              "type": "string"
+            },
+            {
+              "id": "list-size",
+              "name": "size",
+              "value": "={{ $json.body?.size ?? \"\" }}",
+              "type": "string"
+            },
+            {
+              "id": "list-price",
+              "name": "price",
+              "value": "={{ $json.body?.price ?? \"\" }}",
+              "type": "string"
+            },
+            {
+              "id": "list-bedrooms",
+              "name": "bedrooms",
+              "value": "={{ $json.body?.bedrooms ?? \"\" }}",
+              "type": "string"
+            },
+            {
+              "id": "list-description",
+              "name": "description",
+              "value": "={{ $json.body?.description ?? \"\" }}",
+              "type": "string"
+            },
+            {
+              "id": "list-listingtype",
+              "name": "listing_type",
+              "value": "={{ $json.body?.listing_type ?? \"\" }}",
+              "type": "string"
+            },
+            {
+              "id": "list-status",
+              "name": "status",
+              "value": "pending_review",
+              "type": "string"
+            },
+            {
+              "id": "list-convid",
+              "name": "conversation_id",
+              "value": "={{ $json.body?.conversation_id ?? \"\" }}",
+              "type": "string"
+            },
+            {
+              "id": "list-created",
+              "name": "created_at",
+              "value": "={{ $now.toISO() }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "8dbc8e12-0d0e-4bd1-b96e-9b897a56e11a",
+      "name": "Normalize Listing Data",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        432,
+        912
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Listings",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/YOUR_GOOGLE_SHEET_ID/edit#gid=0"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "property_id": "={{ $json.property_id }}",
+            "owner_name": "={{ $json.owner_name }}",
+            "phone_number": "={{ $json.phone_number }}",
+            "property_type": "={{ $json.property_type }}",
+            "location": "={{ $json.location }}",
+            "size": "={{ $json.size }}",
+            "price": "={{ $json.price }}",
+            "bedrooms": "={{ $json.bedrooms }}",
+            "description": "={{ $json.description }}",
+            "listing_type": "={{ $json.listing_type }}",
+            "status": "={{ $json.status }}",
+            "conversation_id": "={{ $json.conversation_id }}",
+            "created_at": "={{ $json.created_at }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "property_id",
+              "displayName": "property_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "owner_name",
+              "displayName": "owner_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "phone_number",
+              "displayName": "phone_number",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "property_type",
+              "displayName": "property_type",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "location",
+              "displayName": "location",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "size",
+              "displayName": "size",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "price",
+              "displayName": "price",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "bedrooms",
+              "displayName": "bedrooms",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "description",
+              "displayName": "description",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "listing_type",
+              "displayName": "listing_type",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "conversation_id",
+              "displayName": "conversation_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "created_at",
+              "displayName": "created_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "id": "c8322e98-5e89-4665-9535-a899e1a22e52",
+      "name": "Append Listing to Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        656,
+        912
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "list-confirm-msg",
+              "name": "message",
+              "value": "={{ \"Thanks. Your property has been submitted for review under reference \" + $json.property_id + \". Our team will list it shortly.\" }}",
+              "type": "string"
+            },
+            {
+              "id": "list-confirm-status",
+              "name": "status",
+              "value": "submitted",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "08af25b7-2fb1-42f7-be25-8e8258bad346",
+      "name": "Build Listing Confirmation",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        880,
+        816
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"status\": $json.status, \"message\": $json.message, \"property_id\": $(\"Normalize Listing Data\").item.json.property_id } }}",
+        "options": {}
+      },
+      "id": "77d05615-4cda-49fc-8024-04671a3787fc",
+      "name": "Respond List Property",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1104,
+        816
+      ]
+    },
+    {
+      "parameters": {
+        "sendTo": "<__PLACEHOLDER_VALUE__Real estate office email to receive notifications__>",
+        "subject": "={{ \"New property submitted: \" + $json.property_id + \" - \" + $json.location }}",
+        "message": "=<div style=\"background:#f4f2ee;padding:32px;font-family:Arial,sans-serif;color:#2a2a2a;\">\n  <div style=\"max-width:600px;margin:auto;background:#ffffff;border-radius:14px;overflow:hidden;box-shadow:0 4px 18px rgba(0,0,0,0.10);\">\n\n<div style=\"background:#1a2b45;padding:28px;text-align:center;color:#ffffff;\">\n  <div style=\"font-size:30px;\">🏠</div>\n  <h1 style=\"margin:8px 0 4px;font-size:24px;\">New Property Submission</h1>\n  <p style=\"margin:0;font-size:14px;opacity:0.85;\">Crestline Realty Group — submitted via the voice assistant</p>\n</div>\n\n<div style=\"padding:30px;\">\n  <p style=\"margin-top:0;font-size:16px;\">A new property has been submitted and is awaiting review before it goes live.</p>\n\n  <table style=\"width:100%;border-collapse:collapse;font-size:15px;\">\n    <tr>\n      <td style=\"padding:12px;border-bottom:1px solid #eee;color:#777;\">Reference</td>\n      <td style=\"padding:12px;border-bottom:1px solid #eee;font-weight:bold;\">{{ $json.property_id }}</td>\n    </tr>\n    <tr>\n      <td style=\"padding:12px;border-bottom:1px solid #eee;color:#777;\">Owner</td>\n      <td style=\"padding:12px;border-bottom:1px solid #eee;font-weight:bold;\">{{ $json.owner_name }}</td>\n    </tr>\n    <tr>\n      <td style=\"padding:12px;border-bottom:1px solid #eee;color:#777;\">Phone</td>\n      <td style=\"padding:12px;border-bottom:1px solid #eee;font-weight:bold;\">\n        <a href=\"tel:{{ $json.phone_number }}\" style=\"color:#1a2b45;text-decoration:none;\">{{ $json.phone_number }}</a>\n      </td>\n    </tr>\n    <tr>\n      <td style=\"padding:12px;border-bottom:1px solid #eee;color:#777;\">Type</td>\n      <td style=\"padding:12px;border-bottom:1px solid #eee;font-weight:bold;text-transform:capitalize;\">{{ $json.property_type }} · {{ $json.listing_type }}</td>\n    </tr>\n    <tr>\n      <td style=\"padding:12px;border-bottom:1px solid #eee;color:#777;\">Location</td>\n      <td style=\"padding:12px;border-bottom:1px solid #eee;font-weight:bold;\">{{ $json.location }}</td>\n    </tr>\n    <tr>\n      <td style=\"padding:12px;border-bottom:1px solid #eee;color:#777;\">Size</td>\n      <td style=\"padding:12px;border-bottom:1px solid #eee;font-weight:bold;\">{{ $json.size }}</td>\n    </tr>\n    <tr>\n      <td style=\"padding:12px;border-bottom:1px solid #eee;color:#777;\">Price</td>\n      <td style=\"padding:12px;border-bottom:1px solid #eee;font-weight:bold;\">${{ $json.price }}</td>\n    </tr>\n    <tr>\n      <td style=\"padding:12px;color:#777;\">Bedrooms</td>\n      <td style=\"padding:12px;font-weight:bold;\">{{ $json.bedrooms }}</td>\n    </tr>\n  </table>\n\n  <div style=\"margin-top:24px;padding:16px;background:#faf8f3;border-left:4px solid #c9a227;border-radius:5px;\">\n    <strong>Description</strong>\n    <p style=\"margin:8px 0 0;line-height:1.6;\">{{ $json.description }}</p>\n  </div>\n\n  <div style=\"margin-top:24px;padding:12px;text-align:center;background:#fdf6e3;color:#8a6d1a;border-radius:6px;font-weight:bold;\">\n    ● Pending review — approve to publish this listing\n  </div>\n</div>\n\n<div style=\"padding:16px;text-align:center;background:#f7f7f7;color:#888;font-size:12px;\">\n  Crestline Realty Group — submitted through the voice assistant\n</div>\n\n  </div>\n</div>",
+        "options": {}
+      },
+      "id": "0450f7b4-465f-4685-b73c-0ad320ff778b",
+      "name": "Send Team New Listing Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        880,
+        1008
+      ],
+      "webhookId": "5c478e82-0b13-4f78-825f-d7a911549aae",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "content": "# list_property\nCaptures a seller or landlord who calls in to list a property. Saves to Listings as pending_review and emails the office for approval.",
+        "width": 512,
+        "color": 7
+      },
+      "id": "dea72c87-f973-474f-b59b-5e54ba3e7262",
+      "name": "Sticky Note 2877f6e8",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -368,
+        880
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "book_property_visit",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "39fdce86-34a3-444d-9596-e58c2a75ccb0",
+      "name": "Book Visit Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        208,
+        1312
+      ],
+      "webhookId": "c16785ef-a89d-464b-b5fb-4963311e7e8b"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "visit-name",
+              "name": "customer_name",
+              "value": "={{ $json.body?.customer_name ?? \"\" }}",
+              "type": "string"
+            },
+            {
+              "id": "visit-phone",
+              "name": "phone_number",
+              "value": "={{ $json.body?.phone_number ?? \"\" }}",
+              "type": "string"
+            },
+            {
+              "id": "visit-propid",
+              "name": "property_id",
+              "value": "={{ $json.body?.property_id ?? \"\" }}",
+              "type": "string"
+            },
+            {
+              "id": "visit-date",
+              "name": "visit_date",
+              "value": "={{ $json.body?.date ?? \"\" }}",
+              "type": "string"
+            },
+            {
+              "id": "visit-time",
+              "name": "visit_time",
+              "value": "={{ $json.body?.time ?? \"\" }}",
+              "type": "string"
+            },
+            {
+              "id": "visit-convid",
+              "name": "conversation_id",
+              "value": "={{ $json.body?.conversation_id ?? \"\" }}",
+              "type": "string"
+            },
+            {
+              "id": "visit-created",
+              "name": "created_at",
+              "value": "={{ $now.toISO() }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "3863f34f-8609-49f3-8b44-2db2236b85a2",
+      "name": "Normalize Visit Request",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        432,
+        1312
+      ]
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 436264102,
+          "mode": "list",
+          "cachedResultName": "Viewings",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/YOUR_GOOGLE_SHEET_ID/edit#gid=436264102"
+        },
+        "options": {}
+      },
+      "id": "54dbcef9-f864-4277-a986-46b84f34bb38",
+      "name": "Read Viewings (Slot Check)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        656,
+        1312
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const request = $('Normalize Visit Request').first().json;\n\nfunction normalizeDate(value) {\n  const text = String(value ?? '').trim();\n  let match = text.match(/^(\\d{4})-(\\d{1,2})-(\\d{1,2})$/);\n  if (match) {\n    return match[1] + '-' + match[2].padStart(2, '0') + '-' + match[3].padStart(2, '0');\n  }\n  match = text.match(/^(\\d{1,2})\\/(\\d{1,2})\\/(\\d{4})$/);\n  if (match) {\n    return match[3] + '-' + match[1].padStart(2, '0') + '-' + match[2].padStart(2, '0');\n  }\n  return text;\n}\n\nfunction normalizeTime(value) {\n  const text = String(value ?? '').trim().toUpperCase();\n  const match = text.match(/^(\\d{1,2})(?::(\\d{2}))?\\s*(AM|PM)?$/);\n  if (!match) {\n    return text;\n  }\n  let hour = Number(match[1]);\n  const minute = Number(match[2] ?? 0);\n  const period = match[3];\n  if (period === 'AM' && hour === 12) {\n    hour = 0;\n  } else if (period === 'PM' && hour !== 12) {\n    hour += 12;\n  }\n  return String(hour).padStart(2, '0') + ':' + String(minute).padStart(2, '0');\n}\n\nconst requestedDate = normalizeDate(request.visit_date);\nconst requestedTime = normalizeTime(request.visit_time);\nconst propertyId = String(request.property_id ?? '').trim();\nconst SLOTS_PER_TIME = 1;\n\nconst rows = $input.all().map((item) => item.json);\n\nconst conflicting = rows.filter((row) => {\n  const status = String(row.status ?? 'booked').trim().toLowerCase();\n  return (\n    String(row.property_id ?? '').trim() === propertyId &&\n    normalizeDate(row.visit_date) === requestedDate &&\n    normalizeTime(row.visit_time) === requestedTime &&\n    status !== 'cancelled'\n  );\n});\n\nconst available = conflicting.length < SLOTS_PER_TIME;\n\nreturn [\n  {\n    json: {\n      available: available,\n      property_id: propertyId,\n      date: requestedDate,\n      time: requestedTime\n    }\n  }\n];"
+      },
+      "id": "fe0a27cc-a329-40ba-be5c-f88e0e8f0ecb",
+      "name": "Check Visit Slot",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        1312
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.available }}",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a12f9c4f-559e-48b1-b57b-495c5d9e35fd",
+      "name": "Is Visit Slot Available",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1104,
+        1312
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 436264102,
+          "mode": "list",
+          "cachedResultName": "Viewings",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/YOUR_GOOGLE_SHEET_ID/edit#gid=436264102"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "available",
+              "displayName": "available",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "property_id",
+              "displayName": "property_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "date",
+              "displayName": "date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "time",
+              "displayName": "time",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "id": "83682aa6-3c40-4e12-91e4-b1431dae40b3",
+      "name": "Append Visit to Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1328,
+        1216
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "visit-confirm-msg",
+              "name": "message",
+              "value": "={{ \"Your visit for property \" + $json.property_id + \" is confirmed on \" + $json.visit_date + \" at \" + $json.visit_time + \". See you then.\" }}",
+              "type": "string"
+            },
+            {
+              "id": "visit-confirm-status",
+              "name": "status",
+              "value": "confirmed",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "e5686d61-74b2-4f4f-a952-20020012e6a6",
+      "name": "Build Visit Confirmation",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1552,
+        1120
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"status\": $json.status, \"message\": $json.message } }}",
+        "options": {}
+      },
+      "id": "86245f74-5e09-453c-b1d4-073cb82c4d97",
+      "name": "Respond Book Visit",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1776,
+        1312
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "visit-unavail-msg",
+              "name": "message",
+              "value": "={{ \"That time slot for property \" + $json.property_id + \" is already taken. Would another time work?\" }}",
+              "type": "string"
+            },
+            {
+              "id": "visit-unavail-status",
+              "name": "status",
+              "value": "unavailable",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "b2eb62b1-297a-4a6d-8bdc-18b0c2b40f99",
+      "name": "Build Visit Unavailable Message",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1552,
+        1504
+      ]
+    },
+    {
+      "parameters": {
+        "sendTo": "<__PLACEHOLDER_VALUE__Real estate office email to receive notifications__>",
+        "subject": "={{ \"New property visit: \" + $json.customer_name + \" - \" + $json.property_id }}",
+        "message": "=<div style=\"background:#f4f2ee;padding:32px;font-family:Arial,sans-serif;color:#2a2a2a;\">\n  <div style=\"max-width:600px;margin:auto;background:#ffffff;border-radius:14px;overflow:hidden;box-shadow:0 4px 18px rgba(0,0,0,0.10);\">\n\n<div style=\"background:#c9a227;padding:28px;text-align:center;color:#ffffff;\">\n  <div style=\"font-size:30px;\">📅</div>\n  <h1 style=\"margin:8px 0 4px;font-size:24px;\">New Property Visit</h1>\n  <p style=\"margin:0;font-size:14px;opacity:0.9;\">Crestline Realty Group — booked through the voice assistant</p>\n</div>\n\n<div style=\"padding:30px;\">\n  <p style=\"margin-top:0;font-size:16px;\">A new property viewing has been booked. Please confirm this fits your schedule.</p>\n\n  <table style=\"width:100%;border-collapse:collapse;font-size:15px;\">\n    <tr>\n      <td style=\"padding:12px;border-bottom:1px solid #eee;color:#777;\">Customer</td>\n      <td style=\"padding:12px;border-bottom:1px solid #eee;font-weight:bold;\">{{ $json.customer_name }}</td>\n    </tr>\n    <tr>\n      <td style=\"padding:12px;border-bottom:1px solid #eee;color:#777;\">Phone</td>\n      <td style=\"padding:12px;border-bottom:1px solid #eee;font-weight:bold;\">\n        <a href=\"tel:{{ $json.phone_number }}\" style=\"color:#1a2b45;text-decoration:none;\">{{ $json.phone_number }}</a>\n      </td>\n    </tr>\n    <tr>\n      <td style=\"padding:12px;border-bottom:1px solid #eee;color:#777;\">Property</td>\n      <td style=\"padding:12px;border-bottom:1px solid #eee;font-weight:bold;\">{{ $json.property_id }}</td>\n    </tr>\n    <tr>\n      <td style=\"padding:12px;border-bottom:1px solid #eee;color:#777;\">Date</td>\n      <td style=\"padding:12px;border-bottom:1px solid #eee;font-weight:bold;\">{{ $json.visit_date }}</td>\n    </tr>\n    <tr>\n      <td style=\"padding:12px;color:#777;\">Time</td>\n      <td style=\"padding:12px;font-weight:bold;\">{{ $json.visit_time }}</td>\n    </tr>\n  </table>\n\n  <div style=\"margin-top:24px;padding:12px;text-align:center;background:#fdf6e3;color:#8a6d1a;border-radius:6px;font-weight:bold;\">\n    ● Visit confirmed and logged\n  </div>\n</div>\n\n<div style=\"padding:16px;text-align:center;background:#f7f7f7;color:#888;font-size:12px;\">\n  Crestline Realty Group — booked through the voice assistant\n</div>\n\n  </div>\n</div>",
+        "options": {}
+      },
+      "id": "d82c88f0-108f-47e5-b40e-830ba998d9b7",
+      "name": "Send Agent New Visit Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        1552,
+        1312
+      ],
+      "webhookId": "a53ae79c-b890-40b2-8da0-bd28a8a72e5c",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "content": "# book_property_visit\nChecks the requested property/date/time slot is not already taken, logs the viewing, and emails the assigned agent.",
+        "height": 176,
+        "width": 512,
+        "color": 7
+      },
+      "id": "241b8816-d1a0-4685-93eb-008c0d2e8f59",
+      "name": "Sticky Note 03180971",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -368,
+        1296
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "get_property_details",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "67612758-9a4f-45c7-82eb-77bbd9f02a45",
+      "name": "Property Details Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        208,
+        1728
+      ],
+      "webhookId": "509b06ef-20ef-4c04-a72d-9f8835ffeccb"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "details-propid",
+              "name": "property_id",
+              "value": "={{ $json.body?.property_id ?? \"\" }}",
+              "type": "string"
+            },
+            {
+              "id": "details-location",
+              "name": "location",
+              "value": "={{ $json.body?.location ?? \"\" }}",
+              "type": "string"
+            },
+            {
+              "id": "details-convid",
+              "name": "conversation_id",
+              "value": "={{ $json.body?.conversation_id ?? \"\" }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "979ff2f8-283f-4533-b86a-d5254ac5f2b3",
+      "name": "Normalize Details Request",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        432,
+        1728
+      ]
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Listings",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/YOUR_GOOGLE_SHEET_ID/edit#gid=0"
+        },
+        "options": {}
+      },
+      "id": "7904ae1b-f03b-471c-b52b-8e86eb960bae",
+      "name": "Read Listings (Details)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        656,
+        1728
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const request = $('Normalize Details Request').first().json;\nconst rows = $input.all().map((item) => item.json);\n\nfunction norm(value) {\n  return String(value ?? '').trim().toLowerCase();\n}\n\nconst wantedId = norm(request.property_id);\nconst wantedLocation = norm(request.location);\n\nconst match = rows.find((row) => {\n  if (wantedId) {\n    return norm(row.property_id) === wantedId;\n  }\n  if (wantedLocation) {\n    return norm(row.location).includes(wantedLocation);\n  }\n  return false;\n});\n\nif (!match) {\n  return [\n    {\n      json: {\n        found: false,\n        message: 'I could not find a property matching that reference. Could you confirm the property ID or address?'\n      }\n    }\n  ];\n}\n\nconst message = 'Property ' + match.property_id + ' is a ' + match.bedrooms + '-bed ' + match.property_type +\n  ' in ' + match.location + ', ' + match.size + ', listed for ' + match.price + ' (' + match.listing_type + '). ' +\n  match.description;\n\nreturn [\n  {\n    json: {\n      found: true,\n      property_id: match.property_id,\n      property_type: match.property_type,\n      location: match.location,\n      size: match.size,\n      price: match.price,\n      bedrooms: match.bedrooms,\n      description: match.description,\n      listing_type: match.listing_type,\n      status: match.status,\n      message: message\n    }\n  }\n];"
+      },
+      "id": "89b7d2b3-fd72-4093-9385-494ddf17b16d",
+      "name": "Find Property Details",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        1728
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"found\": $json.found, \"message\": $json.message, \"property_id\": $json.property_id ?? null, \"price\": $json.price ?? null, \"location\": $json.location ?? null } }}",
+        "options": {}
+      },
+      "id": "1e14ff4c-809a-468e-8fa7-e7b16fb107a0",
+      "name": "Respond Property Details",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1104,
+        1728
+      ]
+    },
+    {
+      "parameters": {
+        "content": "# get_property_details\nCaller asks about a specific listing by property ID or address. Reads Listings, finds the matching row, and speaks back price, size, bedrooms, and description.",
+        "width": 480,
+        "color": 7
+      },
+      "id": "1e9656df-a8e3-4b19-be58-839ef8f658cb",
+      "name": "Sticky Note 77285450",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -352,
+        1712
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "request_human_callback_1",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "eda1c15d-c757-47e8-a7e7-672954c8e448",
+      "name": "Escalation Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        208,
+        2112
+      ],
+      "webhookId": "35ec29a5-e54c-481e-8803-733edadd5e5f"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "esc-name",
+              "name": "customer_name",
+              "value": "={{ $json.body?.customer_name ?? \"\" }}",
+              "type": "string"
+            },
+            {
+              "id": "esc-phone",
+              "name": "phone_number",
+              "value": "={{ $json.body?.phone_number ?? \"\" }}",
+              "type": "string"
+            },
+            {
+              "id": "esc-reason",
+              "name": "reason",
+              "value": "={{ $json.body?.reason ?? \"\" }}",
+              "type": "string"
+            },
+            {
+              "id": "esc-convid",
+              "name": "conversation_id",
+              "value": "={{ $json.body?.conversation_id ?? \"\" }}",
+              "type": "string"
+            },
+            {
+              "id": "esc-created",
+              "name": "created_at",
+              "value": "={{ $now.toISO() }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "cc36a470-fc74-44fe-8443-02feca925a8d",
+      "name": "Normalize Escalation Data",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        432,
+        2112
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 1690809018,
+          "mode": "list",
+          "cachedResultName": "Escalations",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/YOUR_GOOGLE_SHEET_ID/edit#gid=1690809018"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "customer_name",
+              "displayName": "customer_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "phone_number",
+              "displayName": "phone_number",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "reason",
+              "displayName": "reason",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "conversation_id",
+              "displayName": "conversation_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "created_at",
+              "displayName": "created_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "id": "e352dd5a-d3d6-47a9-8c99-958231439197",
+      "name": "Append Escalation to Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        656,
+        2112
+      ]
+    },
+    {
+      "parameters": {
+        "sendTo": "<__PLACEHOLDER_VALUE__Real estate office email to receive notifications__>",
+        "subject": "={{ \"Callback requested: \" + $json.customer_name }}",
+        "message": "=<div style=\"background:#f4f2ee;padding:32px;font-family:Arial,sans-serif;color:#2a2a2a;\">\n  <div style=\"max-width:600px;margin:auto;background:#ffffff;border-radius:14px;overflow:hidden;box-shadow:0 4px 18px rgba(0,0,0,0.10);\">\n\n<div style=\"background:#a61b1b;padding:28px;text-align:center;color:#ffffff;\">\n  <div style=\"font-size:30px;\">📞</div>\n  <h1 style=\"margin:8px 0 4px;font-size:24px;\">Urgent Callback Request</h1>\n  <p style=\"margin:0;font-size:14px;opacity:0.9;\">Crestline Realty Group — flagged during a voice call</p>\n</div>\n\n<div style=\"padding:30px;\">\n  <div style=\"margin-bottom:24px;padding:14px;background:#fff1f1;border-left:4px solid #a61b1b;border-radius:5px;color:#821717;\">\n    <strong>Action required:</strong> please contact this customer as soon as possible.\n  </div>\n\n  <table style=\"width:100%;border-collapse:collapse;font-size:15px;\">\n    <tr>\n      <td style=\"padding:12px;border-bottom:1px solid #eee;color:#777;\">Customer</td>\n      <td style=\"padding:12px;border-bottom:1px solid #eee;font-weight:bold;\">{{ $json.customer_name }}</td>\n    </tr>\n    <tr>\n      <td style=\"padding:12px;border-bottom:1px solid #eee;color:#777;\">Phone</td>\n      <td style=\"padding:12px;border-bottom:1px solid #eee;font-weight:bold;\">\n        <a href=\"tel:{{ $json.phone_number }}\" style=\"color:#a61b1b;text-decoration:none;\">{{ $json.phone_number }}</a>\n      </td>\n    </tr>\n    <tr>\n      <td style=\"padding:12px;color:#777;\">Logged at</td>\n      <td style=\"padding:12px;font-weight:bold;\">{{ $json.created_at }}</td>\n    </tr>\n  </table>\n\n  <div style=\"margin-top:24px;padding:18px;background:#faf8f3;border-left:4px solid #c9a227;border-radius:5px;\">\n    <strong style=\"font-size:16px;\">Reason for callback</strong>\n    <p style=\"margin:10px 0 0;line-height:1.6;\">{{ $json.reason }}</p>\n  </div>\n\n  <div style=\"margin-top:24px;text-align:center;\">\n    <a href=\"tel:{{ $json.phone_number }}\" style=\"display:inline-block;background:#a61b1b;color:#ffffff;padding:13px 24px;border-radius:7px;text-decoration:none;font-weight:bold;\">\n      Call {{ $json.customer_name }}\n    </a>\n  </div>\n</div>\n\n<div style=\"padding:16px;text-align:center;background:#f7f7f7;color:#888;font-size:12px;\">\n  Crestline Realty Group — logged by the voice assistant\n</div>\n\n  </div>\n</div>",
+        "options": {}
+      },
+      "id": "3e9e7ff4-f8b2-4e5c-bfd3-db69789c6401",
+      "name": "Send Office Escalation Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        880,
+        2016
+      ],
+      "webhookId": "e87ef907-8a4b-4852-b8c0-a7b7e39defd7",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "esc-msg",
+              "name": "message",
+              "value": "={{ \"Got it, \" + $json.customer_name + \". I have flagged this for our team and someone will call you back shortly at \" + $json.phone_number + \".\" }}",
+              "type": "string"
+            },
+            {
+              "id": "esc-status",
+              "name": "status",
+              "value": "callback_requested",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "dbb9dae0-6d60-43b5-a5ee-76bd562b339e",
+      "name": "Build Escalation Response",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        880,
+        2208
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"status\": $json.status, \"message\": $json.message } }}",
+        "options": {}
+      },
+      "id": "29ae2f4d-c639-43e5-b129-43d0afed7496",
+      "name": "Respond Escalation",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1104,
+        2208
+      ]
+    },
+    {
+      "parameters": {
+        "content": "# request_human_callback\nEscalation path for financing, negotiation, or anything the AI should not handle. Logs to Escalations and alerts the office.",
+        "width": 480,
+        "color": 7
+      },
+      "id": "deaeb352-e6de-4a3d-97f1-1abb884dc06c",
+      "name": "Sticky Note 13dc43da",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -352,
+        2112
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Check Availability Webhook": {
+      "main": [
+        [
+          {
+            "node": "Normalize Search Criteria",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Search Criteria": {
+      "main": [
+        [
+          {
+            "node": "Read Listings (Search)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Listings (Search)": {
+      "main": [
+        [
+          {
+            "node": "Filter Matching Properties",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Matching Properties": {
+      "main": [
+        [
+          {
+            "node": "Respond Availability Search",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List Property Webhook": {
+      "main": [
+        [
+          {
+            "node": "Normalize Listing Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Listing Data": {
+      "main": [
+        [
+          {
+            "node": "Append Listing to Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Append Listing to Sheet": {
+      "main": [
+        [
+          {
+            "node": "Build Listing Confirmation",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Send Team New Listing Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Listing Confirmation": {
+      "main": [
+        [
+          {
+            "node": "Respond List Property",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Book Visit Webhook": {
+      "main": [
+        [
+          {
+            "node": "Normalize Visit Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Visit Request": {
+      "main": [
+        [
+          {
+            "node": "Read Viewings (Slot Check)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Viewings (Slot Check)": {
+      "main": [
+        [
+          {
+            "node": "Check Visit Slot",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Visit Slot": {
+      "main": [
+        [
+          {
+            "node": "Is Visit Slot Available",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Visit Slot Available": {
+      "main": [
+        [
+          {
+            "node": "Append Visit to Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Visit Unavailable Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Append Visit to Sheet": {
+      "main": [
+        [
+          {
+            "node": "Build Visit Confirmation",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Send Agent New Visit Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Visit Confirmation": {
+      "main": [
+        [
+          {
+            "node": "Respond Book Visit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Visit Unavailable Message": {
+      "main": [
+        [
+          {
+            "node": "Respond Book Visit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Property Details Webhook": {
+      "main": [
+        [
+          {
+            "node": "Normalize Details Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Details Request": {
+      "main": [
+        [
+          {
+            "node": "Read Listings (Details)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Listings (Details)": {
+      "main": [
+        [
+          {
+            "node": "Find Property Details",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Property Details": {
+      "main": [
+        [
+          {
+            "node": "Respond Property Details",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Escalation Webhook": {
+      "main": [
+        [
+          {
+            "node": "Normalize Escalation Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Escalation Data": {
+      "main": [
+        [
+          {
+            "node": "Append Escalation to Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Append Escalation to Sheet": {
+      "main": [
+        [
+          {
+            "node": "Send Office Escalation Email",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Build Escalation Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Escalation Response": {
+      "main": [
+        [
+          {
+            "node": "Respond Escalation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": true
+  },
+  "versionId": "59a5f0a0-0b55-4764-8045-6e9c57eef06c",
+  "meta": {
+    "instanceId": "453e5935772e7db67484aa1235c207eab71eb591c44520f33d49de34bc305077"
+  },
+  "nodeGroups": [],
+  "id": "66ka0A5bQtQszaTz",
+  "tags": []
+}

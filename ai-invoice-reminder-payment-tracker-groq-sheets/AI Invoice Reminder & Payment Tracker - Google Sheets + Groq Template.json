@@ -1,0 +1,1363 @@
+{
+  "name": "AI Invoice Reminder & Payment Tracker - Google Sheets + Groq",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "22 9 * * *"
+            }
+          ]
+        }
+      },
+      "id": "c6b91820-bae5-4d37-add6-fd43cb98e3df",
+      "name": "Schedule Daily Check",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "position": [
+        1472,
+        -128
+      ],
+      "notesInFlow": true,
+      "typeVersion": 1.2,
+      "notes": "Runs every day at 9 AM"
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Invoices",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "b3658be3-002d-4e08-88ee-70551e4b9b54",
+      "name": "Fetch Pending Invoices",
+      "type": "n8n-nodes-base.googleSheets",
+      "position": [
+        1712,
+        -128
+      ],
+      "notesInFlow": true,
+      "typeVersion": 4.6,
+      "notes": "Read invoice records from the Invoices tab"
+    },
+    {
+      "parameters": {
+        "jsCode": "const invoices = $input.all();\nconst today = new Date();\ntoday.setHours(0, 0, 0, 0);\nconst results = [];\n\nfor (const invoice of invoices) {\n  const row = invoice.json;\n  if (String(row.payment_status || '').toLowerCase() === 'paid') continue;\n\n  const dueDate = new Date(row.due_date);\n  if (Number.isNaN(dueDate.getTime())) continue;\n  dueDate.setHours(0, 0, 0, 0);\n\n  const daysOverdue = Math.floor((today - dueDate) / 86400000);\n  if (daysOverdue < -7) continue;\n\n  const lastReminder = row.last_reminder_sent ? new Date(row.last_reminder_sent) : null;\n  const daysSinceReminder = lastReminder && !Number.isNaN(lastReminder.getTime())\n    ? Math.floor((today - lastReminder) / 86400000)\n    : 999;\n\n  let reminderType = '';\n  let urgencyLevel = '';\n\n  if (daysOverdue > 30 && daysSinceReminder >= 3) {\n    reminderType = 'final_notice'; urgencyLevel = 'critical';\n  } else if (daysOverdue > 14 && daysSinceReminder >= 5) {\n    reminderType = 'second_reminder'; urgencyLevel = 'high';\n  } else if (daysOverdue > 0 && daysSinceReminder >= 7) {\n    reminderType = 'first_reminder'; urgencyLevel = 'medium';\n  } else if (daysOverdue === 0 && daysSinceReminder >= 1) {\n    reminderType = 'due_today'; urgencyLevel = 'medium';\n  } else if (daysOverdue < 0 && daysOverdue >= -3 && !lastReminder) {\n    reminderType = 'upcoming_reminder'; urgencyLevel = 'low';\n  } else {\n    continue;\n  }\n\n  results.push({ json: { ...row, daysOverdue, daysSinceReminder, reminderType, urgencyLevel } });\n}\n\nreturn results;"
+      },
+      "id": "9ee5c3ce-50ec-4793-a1b0-4e014f0984ca",
+      "name": "Calculate Reminder Logic",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        2160,
+        -128
+      ],
+      "notesInFlow": true,
+      "typeVersion": 2,
+      "notes": "Smart logic for reminder timing"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "ai-prompt",
+              "name": "aiPrompt",
+              "type": "string",
+              "value": "=Write a professional payment reminder email using the following information:\n\nClient Name: {{ $json.client_name }}\nInvoice Number: {{ $json.invoice_number }}\nAmount: {{ $json.currency }} {{ $json.invoice_amount }}\nIssue Date: {{ $json.issue_date }}\nDue Date: {{ $json.due_date }}\nDays Overdue: {{ $json.daysOverdue }}\nReminder Type: {{ $json.reminderType }}\nUrgency Level: {{ $json.urgencyLevel }}\n\nRequirements:\n- Address the client by name.\n- Clearly mention the invoice number, amount, and due date.\n- Explain whether the invoice is due soon, due today, or overdue.\n- Politely ask the customer to complete the outstanding payment.\n- If appropriate, tell them to disregard the reminder if payment has already been made.\n- Do not include or mention any payment link or payment button.\n- Do not include placeholders.\n- Do not invent company information.\n- End exactly with:\n\nBest regards,\nFinance Team"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "40138aff-7c56-4670-98a1-df4376e538e9",
+      "name": "Prepare AI Prompt",
+      "type": "n8n-nodes-base.set",
+      "position": [
+        2384,
+        -128
+      ],
+      "typeVersion": 3.4
+    },
+    {
+      "parameters": {
+        "jsCode": "const aiItems = $input.all();\nconst originals = $('Calculate Reminder Logic').all();\n\nreturn aiItems.map((item, index) => {\n  const original = originals[index]?.json || {};\n\n  const aiResponse =\n    item.json.output ||\n    item.json.text ||\n    item.json.response ||\n    item.json.message?.content ||\n    '';\n\n  const subjectMatch = aiResponse.match(\n    /Subject:\\s*(.+?)(?:\\r?\\n|$)/i\n  );\n\n  const subject = subjectMatch\n    ? subjectMatch[1].trim()\n    : `Payment Reminder - Invoice ${original.invoice_number}`;\n\n  let body = aiResponse\n    .replace(/Subject:\\s*(.+?)(?:\\r?\\n|$)/i, '')\n    .trim();\n\n  // Remove AI-generated placeholders and payment-link instructions.\n  // The payment button is added separately below.\n  body = body\n    .replace(/\\[Your Name\\]/gi, 'Finance Team')\n    .replace(/\\[Company Name\\]/gi, '')\n    .replace(/\\[Your Company Name\\]/gi, '')\n    .replace(/\\[Your Company\\]/gi, '')\n    .replace(/^.*\\[Payment Link\\].*$/gim, '')\n    .replace(/^.*the Pay Invoice button below.*$/gim, '')\n    .replace(/^.*via the link below.*$/gim, '')\n    .replace(/^.*use the payment link below.*$/gim, '')\n    .replace(/\\n{3,}/g, '\\n\\n')\n    .trim();\n\n  // Escape AI text before inserting it into the HTML email.\n  body = body\n    .replace(/&/g, '&amp;')\n    .replace(/</g, '&lt;')\n    .replace(/>/g, '&gt;')\n    .replace(/\\n/g, '<br>');\n\n  const status =\n    original.daysOverdue > 0\n      ? `Overdue by ${original.daysOverdue} days`\n      : original.daysOverdue === 0\n        ? 'Due today'\n        : 'Due soon';\n\n  const statusColor =\n    original.daysOverdue > 0 ? '#d32f2f' : '#f57c00';\n\n  const paymentUrl =\n    `https://your-payment-page.example.com/` +\n    `?invoice=${encodeURIComponent(original.invoice_number)}` +\n    `&amount=${encodeURIComponent(original.invoice_amount)}` +\n    `&currency=${encodeURIComponent(original.currency)}` +\n    `&name=${encodeURIComponent(original.client_name)}`;\n\n  const invoiceTable = `\n    <div style=\"\n      background:#f5f5f5;\n      padding:20px;\n      border-radius:8px;\n      margin:20px 0;\n    \">\n      <h3 style=\"\n        margin-top:0;\n        margin-bottom:12px;\n        color:#000000;\n      \">\n        Invoice Details\n      </h3>\n\n      <table style=\"\n        width:100%;\n        border-collapse:collapse;\n      \">\n        <tr>\n          <td style=\"\n            padding:8px;\n            font-weight:bold;\n          \">\n            Invoice Number:\n          </td>\n\n          <td style=\"padding:8px;\">\n            ${original.invoice_number}\n          </td>\n        </tr>\n\n        <tr>\n          <td style=\"\n            padding:8px;\n            font-weight:bold;\n          \">\n            Amount:\n          </td>\n\n          <td style=\"padding:8px;\">\n            ${original.currency} ${original.invoice_amount}\n          </td>\n        </tr>\n\n        <tr>\n          <td style=\"\n            padding:8px;\n            font-weight:bold;\n          \">\n            Due Date:\n          </td>\n\n          <td style=\"padding:8px;\">\n            ${original.due_date}\n          </td>\n        </tr>\n\n        <tr>\n          <td style=\"\n            padding:8px;\n            font-weight:bold;\n          \">\n            Status:\n          </td>\n\n          <td style=\"\n            padding:8px;\n            color:${statusColor};\n            font-weight:bold;\n          \">\n            ${status}\n          </td>\n        </tr>\n      </table>\n    </div>\n  `;\n\n  const paymentButton = `\n    <div style=\"\n      margin:24px 0;\n      text-align:left;\n    \">\n      <p style=\"\n        margin:0 0 12px 0;\n        color:#333333;\n      \">\n        To complete your payment, please use the button below:\n      </p>\n\n      <a\n        href=\"${paymentUrl}\"\n        target=\"_blank\"\n        style=\"\n          display:inline-block;\n          padding:12px 22px;\n          background-color:#2563eb;\n          color:#ffffff;\n          text-decoration:none;\n          border-radius:6px;\n          font-weight:bold;\n        \"\n      >\n        Pay Invoice\n      </a>\n    </div>\n  `;\n\n  const firstBreak = body.indexOf('<br>');\n\n  const greeting =\n    firstBreak >= 0\n      ? body.slice(0, firstBreak)\n      : body;\n\n  const remainder =\n    firstBreak >= 0\n      ? body.slice(firstBreak + 4)\n      : '';\n\n  const emailBody = `\n    <html>\n      <body style=\"\n        font-family:Arial,sans-serif;\n        line-height:1.6;\n        color:#333333;\n        max-width:650px;\n        margin:0 auto;\n      \">\n        ${greeting}\n\n        ${invoiceTable}\n\n        ${paymentButton}\n\n        ${remainder}\n\n        <div style=\"\n          margin-top:30px;\n          padding-top:20px;\n          border-top:1px solid #dddddd;\n          font-size:12px;\n          color:#666666;\n        \">\n          This is an automated reminder. If payment has already\n          been made, please disregard this email.\n        </div>\n      </body>\n    </html>\n  `;\n\n  return {\n    json: {\n      ...original,\n      aiResponse,\n      paymentUrl,\n      emailSubject: subject,\n      emailBody\n    }\n  };\n});"
+      },
+      "id": "5c78eb47-1b94-449a-95aa-09a0d3fc207b",
+      "name": "Format Email",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        2944,
+        -128
+      ],
+      "notesInFlow": true,
+      "typeVersion": 2,
+      "notes": "Format email with HTML styling"
+    },
+    {
+      "parameters": {
+        "fromEmail": "your-finance@example.com",
+        "toEmail": "={{ $json.client_email }}",
+        "subject": "={{ $json.emailSubject }}",
+        "html": "={{ $json.emailBody }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "8b421a3a-0643-4d36-8121-7a836dfba75c",
+      "name": "Send Email Reminder",
+      "type": "n8n-nodes-base.emailSend",
+      "position": [
+        3168,
+        -128
+      ],
+      "notesInFlow": true,
+      "typeVersion": 2.1,
+      "notes": "Send the reminder email"
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Invoices",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "invoice_number": "={{ $('Format Email').item.json.invoice_number }}",
+            "last_reminder_sent": "={{ $now.toISO() }}",
+            "reminder_count": "={{ Number($('Format Email').item.json.reminder_count || 0) + 1 }}",
+            "last_reminder_type": "={{ $('Format Email').item.json.reminderType }}"
+          },
+          "matchingColumns": [
+            "invoice_number"
+          ],
+          "schema": [
+            {
+              "id": "invoice_id",
+              "displayName": "invoice_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "client_name",
+              "displayName": "client_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "client_email",
+              "displayName": "client_email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "invoice_number",
+              "displayName": "invoice_number",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "invoice_amount",
+              "displayName": "invoice_amount",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "currency",
+              "displayName": "currency",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "issue_date",
+              "displayName": "issue_date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "due_date",
+              "displayName": "due_date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "payment_status",
+              "displayName": "payment_status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "payment_date",
+              "displayName": "payment_date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "payment_amount",
+              "displayName": "payment_amount",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "payment_method",
+              "displayName": "payment_method",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "last_reminder_sent",
+              "displayName": "last_reminder_sent",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "reminder_count",
+              "displayName": "reminder_count",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "last_reminder_type",
+              "displayName": "last_reminder_type",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "row_number",
+              "displayName": "row_number",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true,
+              "readOnly": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "3e08d8fb-be31-46a6-96c0-fda0ac2ef21c",
+      "name": "Update Reminder Status",
+      "type": "n8n-nodes-base.googleSheets",
+      "position": [
+        3392,
+        -128
+      ],
+      "notesInFlow": true,
+      "typeVersion": 4.6,
+      "notes": "Update reminder details in the matching invoice row"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "timestamp",
+              "name": "timestamp",
+              "type": "string",
+              "value": "={{ $now.toISO() }}"
+            },
+            {
+              "id": "invoice_id",
+              "name": "invoice_id",
+              "type": "string",
+              "value": "={{ $('Format Email').item.json.invoice_id }}"
+            },
+            {
+              "id": "invoice_number",
+              "name": "invoice_number",
+              "type": "string",
+              "value": "={{ $('Format Email').item.json.invoice_number }}"
+            },
+            {
+              "id": "client_name",
+              "name": "client_name",
+              "type": "string",
+              "value": "={{ $('Format Email').item.json.client_name }}"
+            },
+            {
+              "id": "client_email",
+              "name": "client_email",
+              "type": "string",
+              "value": "={{ $('Format Email').item.json.client_email }}"
+            },
+            {
+              "id": "amount",
+              "name": "amount",
+              "type": "number",
+              "value": "={{ Number($('Format Email').item.json.invoice_amount) }}"
+            },
+            {
+              "id": "currency",
+              "name": "currency",
+              "type": "string",
+              "value": "={{ $('Format Email').item.json.currency }}"
+            },
+            {
+              "id": "reminder_type",
+              "name": "reminder_type",
+              "type": "string",
+              "value": "={{ $('Format Email').item.json.reminderType }}"
+            },
+            {
+              "id": "urgency_level",
+              "name": "urgency_level",
+              "type": "string",
+              "value": "={{ $('Format Email').item.json.urgencyLevel }}"
+            },
+            {
+              "id": "days_overdue",
+              "name": "days_overdue",
+              "type": "number",
+              "value": "={{ $('Format Email').item.json.daysOverdue }}"
+            },
+            {
+              "id": "status",
+              "name": "status",
+              "type": "string",
+              "value": "reminder_sent"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "d39ef015-d4c0-426c-82c4-7082ccfc3466",
+      "name": "Create Activity Log",
+      "type": "n8n-nodes-base.set",
+      "position": [
+        3616,
+        -128
+      ],
+      "typeVersion": 3.4
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Activity Log",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "timestamp",
+              "displayName": "timestamp",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "invoice_id",
+              "displayName": "invoice_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "invoice_number",
+              "displayName": "invoice_number",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "client_name",
+              "displayName": "client_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "client_email",
+              "displayName": "client_email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "amount",
+              "displayName": "amount",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "currency",
+              "displayName": "currency",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "reminder_type",
+              "displayName": "reminder_type",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "urgency_level",
+              "displayName": "urgency_level",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "days_overdue",
+              "displayName": "days_overdue",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "707e1f55-7a3b-4d8b-aaac-0350a2f1156a",
+      "name": "Save to Activity Log",
+      "type": "n8n-nodes-base.googleSheets",
+      "position": [
+        3840,
+        -128
+      ],
+      "typeVersion": 4.6,
+      "notes": "Append reminder history to the Activity Log tab"
+    },
+    {
+      "parameters": {
+        "jsCode": "const allItems = $('Format Email').all();\nconst summary = { totalReminders: allItems.length, byUrgency: {}, byType: {}, totalAmountOutstanding: 0, clients: [] };\nfor (const item of allItems) {\n  const row = item.json;\n  summary.byUrgency[row.urgencyLevel] = (summary.byUrgency[row.urgencyLevel] || 0) + 1;\n  summary.byType[row.reminderType] = (summary.byType[row.reminderType] || 0) + 1;\n  summary.totalAmountOutstanding += Number(row.invoice_amount || 0);\n  summary.clients.push({ name: row.client_name, invoice: row.invoice_number, amount: row.invoice_amount, daysOverdue: row.daysOverdue, urgency: row.urgencyLevel });\n}\nreturn [{ json: summary }];"
+      },
+      "id": "9ef6bb46-e5d7-4c20-8744-f89cb6bb65ec",
+      "name": "Generate Daily Summary",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        4064,
+        -128
+      ],
+      "notesInFlow": true,
+      "typeVersion": 2,
+      "notes": "Create summary report"
+    },
+    {
+      "parameters": {
+        "fromEmail": "your-finance@example.com",
+        "toEmail": "your-finance@example.com",
+        "subject": "=Daily Invoice Reminder Report - {{ $now.toFormat('yyyy-MM-dd') }}",
+        "html": "=={{\n'<div style=\"font-family:Arial,sans-serif;max-width:700px;margin:auto;color:#222;\">' +\n  '<h2 style=\"color:#1f2937;\">Daily Invoice Reminder Report</h2>' +\n  '<div style=\"background:#f3f4f6;padding:16px;border-radius:8px;margin-bottom:20px;\">' +\n    '<p><strong>Total reminders:</strong> ' + $json.totalReminders + '</p>' +\n    '<p><strong>Total outstanding:</strong> USD ' + $json.totalAmountOutstanding + '</p>' +\n  '</div>' +\n  '<h3>Urgency Breakdown</h3>' +\n  '<p>Medium: ' + ($json.byUrgency.medium || 0) + '</p>' +\n  '<h3>Client Details</h3>' +\n  '<table style=\"width:100%;border-collapse:collapse;\">' +\n    '<tr style=\"background:#1f2937;color:white;\">' +\n      '<th style=\"padding:10px;text-align:left;\">Client</th>' +\n      '<th style=\"padding:10px;text-align:left;\">Invoice</th>' +\n      '<th style=\"padding:10px;text-align:left;\">Amount</th>' +\n      '<th style=\"padding:10px;text-align:left;\">Overdue</th>' +\n      '<th style=\"padding:10px;text-align:left;\">Urgency</th>' +\n    '</tr>' +\n    $json.clients.map(client =>\n      '<tr style=\"border-bottom:1px solid #ddd;\">' +\n        '<td style=\"padding:10px;\">' + client.name + '</td>' +\n        '<td style=\"padding:10px;\">' + client.invoice + '</td>' +\n        '<td style=\"padding:10px;\">USD ' + client.amount + '</td>' +\n        '<td style=\"padding:10px;\">' + client.daysOverdue + ' days</td>' +\n        '<td style=\"padding:10px;text-transform:capitalize;\">' + client.urgency + '</td>' +\n      '</tr>'\n    ).join('') +\n  '</table>' +\n  '<p style=\"font-size:12px;color:#666;margin-top:24px;\">Generated automatically by the invoice reminder workflow.</p>' +\n'</div>'\n}}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "65955e56-1c1f-4486-a8f9-9ef350952f1c",
+      "name": "Send Summary to Finance Team",
+      "type": "n8n-nodes-base.emailSend",
+      "position": [
+        4288,
+        -128
+      ],
+      "typeVersion": 2.1
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "invoice-paid",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "e28ae509-9597-40fa-9ab3-ee4619e57d51",
+      "name": "Webhook: Payment Received",
+      "type": "n8n-nodes-base.webhook",
+      "position": [
+        1472,
+        528
+      ],
+      "notesInFlow": true,
+      "typeVersion": 2,
+      "notes": "Trigger when payment is received"
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Invoices",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "invoice_number": "={{ $(\"Webhook: Payment Received\").item.json.body.invoice_number }}",
+            "payment_status": "paid",
+            "payment_date": "={{ $now.toISO() }}",
+            "payment_amount": "={{ Number($(\"Webhook: Payment Received\").item.json.body.amount) }}",
+            "payment_method": "={{ $(\"Webhook: Payment Received\").item.json.body.payment_method }}"
+          },
+          "matchingColumns": [
+            "invoice_number"
+          ],
+          "schema": [
+            {
+              "id": "invoice_id",
+              "displayName": "invoice_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "client_name",
+              "displayName": "client_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "client_email",
+              "displayName": "client_email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "invoice_number",
+              "displayName": "invoice_number",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "invoice_amount",
+              "displayName": "invoice_amount",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "currency",
+              "displayName": "currency",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "issue_date",
+              "displayName": "issue_date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "due_date",
+              "displayName": "due_date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "payment_status",
+              "displayName": "payment_status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "payment_date",
+              "displayName": "payment_date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "payment_amount",
+              "displayName": "payment_amount",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "payment_method",
+              "displayName": "payment_method",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "last_reminder_sent",
+              "displayName": "last_reminder_sent",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "reminder_count",
+              "displayName": "reminder_count",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "last_reminder_type",
+              "displayName": "last_reminder_type",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "row_number",
+              "displayName": "row_number",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true,
+              "readOnly": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "c64ad842-303b-4b1d-9bb4-d802825223d2",
+      "name": "Update Payment Status",
+      "type": "n8n-nodes-base.googleSheets",
+      "position": [
+        2032,
+        528
+      ],
+      "typeVersion": 4.6,
+      "notes": "Mark the matching invoice row as paid"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"success\": true,\n  \"message\": \"Payment recorded successfully\",\n  \"invoice_number\": \"{{ $json.invoice_number }}\",\n  \"amount_paid\": {{ $json.payment_amount }},\n  \"status\": \"{{ $json.payment_status }}\"\n}",
+        "options": {}
+      },
+      "id": "067a917c-68f5-449c-a514-79dee8f0a024",
+      "name": "Webhook Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "position": [
+        2304,
+        320
+      ],
+      "typeVersion": 1.1
+    },
+    {
+      "parameters": {
+        "fromEmail": "your-finance@example.com",
+        "toEmail": "={{ $(\"Lookup Invoice\").item.json.client_email }}",
+        "subject": "=Payment Confirmation - Invoice {{ $(\"Lookup Invoice\").item.json.invoice_number }}",
+        "html": "=={{\n'<div style=\"font-family:Arial,sans-serif;max-width:600px;margin:0 auto;color:#333333;line-height:1.6;\">' +\n\n  '<h2 style=\"color:#000000;margin-bottom:20px;\">Thank You!</h2>' +\n\n  '<p>Hi ' +\n    $(\"Lookup Invoice\").item.json.client_name +\n  ',</p>' +\n\n  '<p>We have successfully received your payment.</p>' +\n\n  '<div style=\"background:#f5f5f5;padding:20px;border-radius:8px;margin:20px 0;\">' +\n    '<h3 style=\"color:#000000;margin-top:0;\">Payment Details</h3>' +\n\n    '<table style=\"width:100%;border-collapse:collapse;\">' +\n      '<tr>' +\n        '<td style=\"padding:8px;font-weight:bold;\">Invoice Number:</td>' +\n        '<td style=\"padding:8px;\">' +\n          $(\"Lookup Invoice\").item.json.invoice_number +\n        '</td>' +\n      '</tr>' +\n\n      '<tr>' +\n        '<td style=\"padding:8px;font-weight:bold;\">Amount Paid:</td>' +\n        '<td style=\"padding:8px;\">' +\n          $(\"Lookup Invoice\").item.json.currency + ' ' +\n          $(\"Webhook: Payment Received\").item.json.body.amount +\n        '</td>' +\n      '</tr>' +\n\n      '<tr>' +\n        '<td style=\"padding:8px;font-weight:bold;\">Payment Method:</td>' +\n        '<td style=\"padding:8px;text-transform:capitalize;\">' +\n          $(\"Webhook: Payment Received\").item.json.body.payment_method +\n        '</td>' +\n      '</tr>' +\n\n      '<tr>' +\n        '<td style=\"padding:8px;font-weight:bold;\">Payment Status:</td>' +\n        '<td style=\"padding:8px;color:#16a34a;font-weight:bold;\">Paid</td>' +\n      '</tr>' +\n    '</table>' +\n  '</div>' +\n\n  '<p>Your invoice has been marked as paid. Please keep this email as confirmation of your payment.</p>' +\n\n  '<p style=\"margin-top:24px;\">Regards,<br><strong>Finance Team</strong></p>' +\n\n  '<div style=\"margin-top:30px;padding-top:15px;border-top:1px solid #dddddd;font-size:12px;color:#666666;\">' +\n    'This is an automated payment confirmation email.' +\n  '</div>' +\n\n'</div>'\n}}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "4ed561a5-b253-472b-8872-f0e0da1207f6",
+      "name": "Send Payment Confirmation",
+      "type": "n8n-nodes-base.emailSend",
+      "position": [
+        2304,
+        736
+      ],
+      "typeVersion": 2.1
+    },
+    {
+      "parameters": {
+        "model": "openai/gpt-oss-120b",
+        "options": {
+          "maxTokensToSample": 500,
+          "temperature": 0.3
+        }
+      },
+      "id": "79d1121a-8f3e-49bd-b457-1cac26645d17",
+      "name": "Groq Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGroq",
+      "position": [
+        2672,
+        96
+      ],
+      "notesInFlow": true,
+      "typeVersion": 1,
+      "notes": "Use Groq to generate personalized reminder emails"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.aiPrompt }}",
+        "options": {
+          "systemMessage": "You write concise and professional invoice reminder emails.\n\nReturn only the email in this exact structure:\n\nSubject: <email subject>\n\nHi <client name>,\n\n<email message>\n\nBest regards,\nFinance Team\n\nRules:\n- Use only the invoice information provided in the prompt.\n- Never use placeholders such as [Your Name], [Company Name], [Your Company Name], or [Payment Link].\n- Do not mention a payment link, payment button, or where the customer can pay. The HTML template adds the payment button separately.\n- Do not invent company names, contact details, bank details, or payment instructions.\n- Do not use Markdown, bullet points, headings, asterisks, or HTML.\n- Keep the tone courteous and professional.\n- Adjust the urgency according to the supplied reminder type.\n- Keep the body concise, around 80–130 words.\n- Always end exactly with:\n\nBest regards,\nFinance Team"
+        }
+      },
+      "id": "f0f4fe5d-3e87-45ed-8934-90f5c8174d1a",
+      "name": "AI Agent For Generate Email Content",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "position": [
+        2592,
+        -128
+      ],
+      "typeVersion": 2.2
+    },
+    {
+      "parameters": {
+        "content": "Starts the automated invoice review at the scheduled time each day.",
+        "height": 288,
+        "width": 208,
+        "color": 5
+      },
+      "id": "abc63dad-a900-4e05-b0c6-fb3d7c524e21",
+      "name": "Sticky Note1",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        1424,
+        -240
+      ],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "content": "Determines whether a reminder is needed and assigns its type and urgency.",
+        "height": 288,
+        "width": 192
+      },
+      "id": "f561f102-f888-4143-9bbd-f7fa503bf627",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        2112,
+        -240
+      ],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "content": "Skips paid invoices and keeps invoices that are due soon or overdue.",
+        "height": 288,
+        "width": 192
+      },
+      "id": "186d1906-e02e-45c6-8c95-9160484b4d6f",
+      "name": "Sticky Note2",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        1888,
+        -240
+      ],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "content": "Reads invoice records from the Invoices tab in Google Sheets.",
+        "height": 288,
+        "width": 192,
+        "color": 5
+      },
+      "id": "4b6f36c6-fc32-4bca-97f6-8ddeaf99ad29",
+      "name": "Sticky Note3",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        1664,
+        -240
+      ],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "content": "Builds an invoice-specific prompt using the client and payment details.",
+        "height": 288,
+        "width": 192
+      },
+      "id": "391394e8-e36b-41f4-9e96-d43596001fff",
+      "name": "Sticky Note4",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        2336,
+        -240
+      ],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "content": "Prepares a structured audit record for the reminder that was sent.",
+        "height": 288,
+        "width": 192,
+        "color": 4
+      },
+      "id": "2adba81b-ea6f-494f-b715-51a72306e772",
+      "name": "Sticky Note5",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        3568,
+        -240
+      ],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "content": "Updates the reminder date, count, and type in the Invoices sheet.",
+        "height": 288,
+        "width": 192,
+        "color": 4
+      },
+      "id": "57816e4d-0305-4e91-9255-f743166553a9",
+      "name": "Sticky Note6",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        3344,
+        -240
+      ],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "content": "Sends the payment reminder and invoice link to the customer.",
+        "height": 288,
+        "width": 192,
+        "color": 2
+      },
+      "id": "aeae5348-abd1-4970-893b-a069a88547ad",
+      "name": "Sticky Note7",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        3120,
+        -240
+      ],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "content": "Formats the AI draft as an HTML email with invoice details and a payment.\n.",
+        "height": 288,
+        "width": 192
+      },
+      "id": "fe3e1d32-8fdb-4221-a8fa-a91309e11000",
+      "name": "Sticky Note8",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        2896,
+        -240
+      ],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "content": "Uses AI to draft a personalized and professional payment reminder.",
+        "height": 496,
+        "width": 272,
+        "color": 6
+      },
+      "id": "a071b7dd-fbca-4fe5-8428-2ac0c49cabcd",
+      "name": "Sticky Note9",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        2576,
+        -240
+      ],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "content": "Compiles reminder totals, outstanding amounts, urgency levels, and client details.",
+        "height": 320,
+        "width": 192
+      },
+      "id": "b9c83d08-3bc1-4907-9d3b-9b25c31d6054",
+      "name": "Sticky Note10",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        4016,
+        -272
+      ],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "content": "Emails the daily invoice reminder report to the finance team.",
+        "height": 304,
+        "width": 192,
+        "color": 2
+      },
+      "id": "f8db5d17-aa89-42a9-b507-c2f0a9e8e39b",
+      "name": "Sticky Note11",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        4240,
+        -256
+      ],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "content": "Appends the reminder record to the Activity Log sheet.",
+        "height": 288,
+        "width": 192
+      },
+      "id": "7a15fa08-713c-4848-b41f-bfe955a3786e",
+      "name": "Sticky Note12",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        3792,
+        -240
+      ],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "content": "Returns a successful payment response to the customer’s payment page.",
+        "height": 288,
+        "width": 192,
+        "color": 3
+      },
+      "id": "634c9829-96e6-4670-99ef-677fb45d94f9",
+      "name": "Sticky Note13",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        2256,
+        176
+      ],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "content": "Receives payment details submitted through the invoice payment page.",
+        "height": 304,
+        "width": 192,
+        "color": 3
+      },
+      "id": "8f8e7cac-4ede-4b02-8fa1-e7099c624182",
+      "name": "Sticky Note14",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        1424,
+        400
+      ],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "content": "Marks the invoice as paid and records the payment date, amount, and method.",
+        "height": 288,
+        "width": 192,
+        "color": 4
+      },
+      "id": "56049b63-54c6-43b3-8f3b-d2f44f89c777",
+      "name": "Sticky Note15",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        1984,
+        400
+      ],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "content": "Sends a payment confirmation and thank-you email to the customer.",
+        "height": 336,
+        "width": 192,
+        "color": 2
+      },
+      "id": "85ece717-31e6-482e-a462-61e763406232",
+      "name": "Sticky Note16",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        2256,
+        576
+      ],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Invoices",
+          "mode": "name"
+        },
+        "filtersUI": {
+          "values": [
+            {
+              "lookupColumn": "invoice_number",
+              "lookupValue": "={{ $json.body.invoice_number }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        1760,
+        528
+      ],
+      "id": "46057097-fd91-48f7-b680-b222edd892b8",
+      "name": "Lookup Invoice"
+    },
+    {
+      "parameters": {
+        "content": "Finds the matching invoice in Google Sheets using its invoice number.",
+        "height": 288,
+        "width": 192,
+        "color": 5
+      },
+      "id": "13d9a609-0075-44c6-bfec-9c5281117855",
+      "name": "Sticky Note17",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        1712,
+        400
+      ],
+      "typeVersion": 1
+    }
+  ],
+  "connections": {
+    "Format Email": {
+      "main": [
+        [
+          {
+            "node": "Send Email Reminder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare AI Prompt": {
+      "main": [
+        [
+          {
+            "node": "AI Agent For Generate Email Content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Activity Log": {
+      "main": [
+        [
+          {
+            "node": "Save to Activity Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Email Reminder": {
+      "main": [
+        [
+          {
+            "node": "Update Reminder Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save to Activity Log": {
+      "main": [
+        [
+          {
+            "node": "Generate Daily Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule Daily Check": {
+      "main": [
+        [
+          {
+            "node": "Fetch Pending Invoices",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Payment Status": {
+      "main": [
+        [
+          {
+            "node": "Webhook Response",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Send Payment Confirmation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Pending Invoices": {
+      "main": [
+        [
+          {
+            "node": "Calculate Reminder Logic",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Daily Summary": {
+      "main": [
+        [
+          {
+            "node": "Send Summary to Finance Team",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Reminder Status": {
+      "main": [
+        [
+          {
+            "node": "Create Activity Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calculate Reminder Logic": {
+      "main": [
+        [
+          {
+            "node": "Prepare AI Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook: Payment Received": {
+      "main": [
+        [
+          {
+            "node": "Lookup Invoice",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent For Generate Email Content": {
+      "main": [
+        [
+          {
+            "node": "Format Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Groq Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent For Generate Email Content",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lookup Invoice": {
+      "main": [
+        [
+          {
+            "node": "Update Payment Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "nodeGroups": [],
+  "tags": []
+}
